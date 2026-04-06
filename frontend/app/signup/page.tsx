@@ -1,0 +1,139 @@
+"use client";
+import { useState, useEffect } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import Link from "next/link";
+import { useAuth } from "@/context/AuthContext";
+import { authAPI } from "@/lib/api";
+import { Car, UserPlus, Lock } from "lucide-react";
+
+const schema = z.object({
+    name: z.string().min(2, "Name must be at least 2 characters"),
+    email: z.string().email("Invalid email"),
+    password: z.string().min(6, "Password must be at least 6 characters"),
+    role: z.enum(["EMPLOYEE", "ADMIN", "MANAGER"]),
+});
+type FormData = z.infer<typeof schema>;
+
+interface RoleAvailability {
+    ADMIN: { count: number; available: boolean };
+    MANAGER: { count: number; available: boolean };
+    EMPLOYEE: { available: boolean };
+}
+
+export default function SignupPage() {
+    const { login } = useAuth();
+    const [error, setError] = useState("");
+    const [loading, setLoading] = useState(false);
+    const [availability, setAvailability] = useState<RoleAvailability | null>(null);
+
+    const { register, handleSubmit, watch, formState: { errors } } = useForm<FormData>({
+        resolver: zodResolver(schema),
+        defaultValues: { role: "EMPLOYEE" },
+    });
+
+    const selectedRole = watch("role");
+
+    useEffect(() => {
+        authAPI.roleAvailability().then(res => setAvailability(res.data)).catch(() => { });
+    }, []);
+
+    const onSubmit = async (data: FormData) => {
+        setError("");
+        setLoading(true);
+        try {
+            const res = await authAPI.signup(data);
+            login(res.data.user, res.data.token);
+        } catch (err: unknown) {
+            const e = err as { response?: { data?: { error?: string } } };
+            setError(e.response?.data?.error || "Signup failed.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const roleUnavailable = (role: string) => {
+        if (!availability) return false;
+        if (role === "ADMIN") return !availability.ADMIN.available;
+        if (role === "MANAGER") return !availability.MANAGER.available;
+        return false;
+    };
+
+    return (
+        <div className="min-h-screen flex items-center justify-center p-4">
+            <div className="fixed inset-0 overflow-hidden pointer-events-none">
+                <div className="absolute -top-40 -left-40 w-96 h-96 bg-violet-600/20 rounded-full blur-3xl" />
+                <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-blue-600/15 rounded-full blur-3xl" />
+            </div>
+
+            <div className="w-full max-w-md animate-fade-in">
+                <div className="text-center mb-8">
+                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600/20 border border-blue-500/30 mb-4">
+                        <Car className="w-8 h-8 text-blue-400" />
+                    </div>
+                    <h1 className="text-3xl font-bold text-white">TrackNFix</h1>
+                    <p className="text-slate-400 mt-1 text-sm">Create your account</p>
+                </div>
+
+                <div className="card">
+                    <div className="flex items-center gap-2 mb-6">
+                        <UserPlus className="w-4 h-4 text-blue-400" />
+                        <h2 className="text-lg font-semibold">Sign Up</h2>
+                    </div>
+
+                    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1.5">Full Name</label>
+                            <input {...register("name")} placeholder="John Doe" className="input-field" disabled={loading} />
+                            {errors.name && <p className="text-red-400 text-xs mt-1">{errors.name.message}</p>}
+                        </div>
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1.5">Email Address</label>
+                            <input {...register("email")} type="email" placeholder="you@example.com" className="input-field" disabled={loading} />
+                            {errors.email && <p className="text-red-400 text-xs mt-1">{errors.email.message}</p>}
+                        </div>
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1.5">Password</label>
+                            <input {...register("password")} type="password" placeholder="••••••••" className="input-field" disabled={loading} />
+                            {errors.password && <p className="text-red-400 text-xs mt-1">{errors.password.message}</p>}
+                        </div>
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-2">Role</label>
+                            <div className="grid grid-cols-3 gap-2">
+                                {(["EMPLOYEE", "ADMIN", "MANAGER"] as const).map(role => {
+                                    const unavailable = roleUnavailable(role);
+                                    return (
+                                        <label key={role} className={`relative flex flex-col items-center gap-1.5 p-3 rounded-xl border cursor-pointer transition-all duration-200 text-center ${unavailable ? "opacity-40 cursor-not-allowed border-white/5 bg-white/3" : selectedRole === role ? "border-blue-500/50 bg-blue-600/15 text-blue-300" : "border-white/10 bg-white/5 hover:bg-white/8 text-slate-400"}`}>
+                                            <input type="radio" value={role} {...register("role")} className="sr-only" disabled={unavailable || loading} />
+                                            <span className="text-xs font-medium">{role === "EMPLOYEE" ? "Employee" : role === "ADMIN" ? "Admin" : "Manager"}</span>
+                                            {unavailable && <span className="text-[10px] text-red-400">Full (max 2)</span>}
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {error && (
+                            <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-400 text-sm">{error}</div>
+                        )}
+
+                        <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-3 text-amber-400 text-xs flex items-start gap-2">
+                            <Lock className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                            <span>Only 2 admins and 2 managers allowed. Employees can sign up freely.</span>
+                        </div>
+
+                        <button type="submit" className="btn-primary w-full" disabled={loading || roleUnavailable(selectedRole)}>
+                            {loading ? "Creating account…" : "Create Account"}
+                        </button>
+                    </form>
+
+                    <p className="text-center text-slate-500 text-sm mt-6">
+                        Already have an account?{" "}
+                        <Link href="/login" className="text-blue-400 hover:text-blue-300 font-medium">Sign in</Link>
+                    </p>
+                </div>
+            </div>
+        </div>
+    );
+}

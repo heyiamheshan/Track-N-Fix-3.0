@@ -101,7 +101,7 @@ export default function ImageUploader({ jobId, phase, label, description, onUplo
                     {images.map((img, i) => (
                         <div key={img.id || i} className="relative group rounded-lg overflow-hidden aspect-square bg-black/30">
                             <img
-                                src={`http://localhost:5000${img.url}`}
+                                src={`http://localhost:5001${img.url}`}
                                 alt={img.caption || `Image ${i + 1}`}
                                 className="w-full h-full object-cover"
                             />

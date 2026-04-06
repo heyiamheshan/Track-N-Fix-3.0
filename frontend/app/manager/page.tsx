@@ -342,8 +342,8 @@ export default function ManagerDashboard() {
                                     {job.images.length > 0 && (
                                         <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 mt-3">
                                             {job.images.slice(0, 12).map(img => (
-                                                <a key={img.id} href={`http://localhost:5000${img.url}`} target="_blank" rel="noopener noreferrer">
-                                                    <img src={`http://localhost:5000${img.url}`} alt="" className="rounded-lg aspect-square object-cover hover:scale-105 transition-transform" />
+                                                <a key={img.id} href={`http://localhost:5001${img.url}`} target="_blank" rel="noopener noreferrer">
+                                                    <img src={`http://localhost:5001${img.url}`} alt="" className="rounded-lg aspect-square object-cover hover:scale-105 transition-transform" />
                                                 </a>
                                             ))}
                                         </div>
@@ -388,8 +388,8 @@ export default function ManagerDashboard() {
                                 <p className="text-xs text-slate-500 mb-2">Job Photos ({editQ.job.images.length})</p>
                                 <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
                                     {editQ.job.images.map(img => (
-                                        <a key={img.id} href={`http://localhost:5000${img.url}`} target="_blank" rel="noopener noreferrer">
-                                            <img src={`http://localhost:5000${img.url}`} alt="" className="rounded-lg aspect-square object-cover hover:scale-105 transition-transform" />
+                                        <a key={img.id} href={`http://localhost:5001${img.url}`} target="_blank" rel="noopener noreferrer">
+                                            <img src={`http://localhost:5001${img.url}`} alt="" className="rounded-lg aspect-square object-cover hover:scale-105 transition-transform" />
                                         </a>
                                     ))}
                                 </div>

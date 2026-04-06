@@ -369,7 +369,7 @@ export default function AdminDashboard() {
                                     {job.images.length > 0 && (
                                         <div className="grid grid-cols-4 gap-2 mt-3">
                                             {job.images.slice(0, 8).map(img => (
-                                                <img key={img.id} src={`http://localhost:5000${img.url}`} alt="" className="rounded-lg aspect-square object-cover" />
+                                                <img key={img.id} src={`http://localhost:5001${img.url}`} alt="" className="rounded-lg aspect-square object-cover" />
                                             ))}
                                         </div>
                                     )}
@@ -415,8 +415,8 @@ export default function AdminDashboard() {
                                     <p className="text-xs text-slate-500 mb-2">{phase === "BEFORE" ? "Before Photos" : phase === "AFTER" ? "After Photos" : "Replaced Parts"} ({imgs.length})</p>
                                     <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
                                         {imgs.map(img => (
-                                            <a key={img.id} href={`http://localhost:5000${img.url}`} target="_blank" rel="noopener noreferrer">
-                                                <img src={`http://localhost:5000${img.url}`} alt="" className="rounded-lg aspect-square object-cover hover:scale-105 transition-transform cursor-zoom-in" />
+                                            <a key={img.id} href={`http://localhost:5001${img.url}`} target="_blank" rel="noopener noreferrer">
+                                                <img src={`http://localhost:5001${img.url}`} alt="" className="rounded-lg aspect-square object-cover hover:scale-105 transition-transform cursor-zoom-in" />
                                             </a>
                                         ))}
                                     </div>

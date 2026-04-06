@@ -6,7 +6,7 @@ import { z } from "zod";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { authAPI } from "@/lib/api";
-import { Car, UserPlus } from "lucide-react";
+import { UserPlus } from "lucide-react";
 
 const schema = z.object({
     name: z.string().min(2, "Name must be at least 2 characters"),
@@ -69,9 +69,7 @@ export default function SignupPage() {
 
             <div className="w-full max-w-md animate-fade-in">
                 <div className="text-center mb-8">
-                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600/20 border border-blue-500/30 mb-4">
-                        <Car className="w-8 h-8 text-blue-400" />
-                    </div>
+                    <img src="/logo.jpg" alt="TrackNFix Logo" className="w-24 h-24 object-contain rounded-3xl mb-4 bg-white/5 shadow-xl shadow-blue-500/10" />
                     <h1 className="text-3xl font-bold text-white">TrackNFix</h1>
                     <p className="text-slate-400 mt-1 text-sm">Create your account</p>
                 </div>

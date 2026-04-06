@@ -4,7 +4,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import ImageUploader from "@/components/ImageUploader";
 import { jobsAPI } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { Plus, Send, CheckCircle, Wrench, Car, Zap, AlertTriangle, FileText, Clock, ChevronRight } from "lucide-react";
+import { Plus, Send, CheckCircle, Wrench, Car, Zap, AlertTriangle, FileText, Clock, ChevronRight, Eye, X } from "lucide-react";
 
 type JobType = "SERVICE" | "REPAIR" | "ACCIDENT_RECOVERY";
 type Step = "select_type" | "before_images" | "after_images" | "notes" | "done";
@@ -37,6 +37,7 @@ export default function EmployeeDashboard() {
     const [tab, setTab] = useState<Tab>("create");
     const [history, setHistory] = useState<any[]>([]);
     const [historyLoading, setHistoryLoading] = useState(false);
+    const [viewingJob, setViewingJob] = useState<any | null>(null);
 
     useEffect(() => {
         if (tab === "history") {
@@ -150,9 +151,9 @@ export default function EmployeeDashboard() {
                                         <span className="font-mono text-sm font-semibold text-white">{job.vehicle.vehicleNumber}</span>
                                         <span className="bg-white/10 px-2 py-0.5 rounded text-[10px] text-slate-300">Job #{job.jobNumber}</span>
                                         <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${job.status === "DRAFT" ? "bg-slate-500/20 text-slate-300" :
-                                                job.status === "SUBMITTED" ? "bg-blue-500/20 text-blue-300" :
-                                                    job.status === "REVIEWED" ? "bg-amber-500/20 text-amber-300" :
-                                                        "bg-emerald-500/20 text-emerald-300"
+                                            job.status === "SUBMITTED" ? "bg-blue-500/20 text-blue-300" :
+                                                job.status === "REVIEWED" ? "bg-amber-500/20 text-amber-300" :
+                                                    "bg-emerald-500/20 text-emerald-300"
                                             }`}>{job.status}</span>
                                     </div>
                                     <div className="text-xs text-slate-500 flex items-center gap-3">
@@ -169,7 +170,11 @@ export default function EmployeeDashboard() {
                                             </div>
                                         ))}
                                     </div>
-                                    <span className="text-[10px] text-slate-500">{job.images?.length || 0} photos</span>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => setViewingJob(job)} className="btn-secondary text-xs mt-2">
+                                            <Eye className="w-3.5 h-3.5 inline mr-1" />View Details
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         ))
@@ -367,6 +372,83 @@ export default function EmployeeDashboard() {
                             </div>
                         </div>
                     )}
+                </div>
+            )}
+
+            {/* Modal for viewing job details */}
+            {viewingJob && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+                    <div className="bg-slate-900 border border-white/10 rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
+                        <div className="p-5 border-b border-white/10 flex justify-between items-center bg-white/5">
+                            <div>
+                                <h3 className="text-lg font-semibold text-white">Job Details #{viewingJob.jobNumber}</h3>
+                                <p className="text-sm text-slate-400">{viewingJob.vehicle?.vehicleNumber} • {new Date(viewingJob.createdAt).toLocaleDateString()}</p>
+                            </div>
+                            <button onClick={() => setViewingJob(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors text-slate-400 hover:text-white">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="p-6 overflow-y-auto space-y-6">
+                            <div className="grid sm:grid-cols-2 gap-4">
+                                <div className="card bg-white/3">
+                                    <p className="text-xs text-slate-500 mb-1">Status</p>
+                                    <p className={`font-semibold ${viewingJob.status === "DRAFT" ? "text-slate-300" :
+                                            viewingJob.status === "SUBMITTED" ? "text-blue-300" :
+                                                viewingJob.status === "REVIEWED" ? "text-amber-300" :
+                                                    "text-emerald-300"
+                                        }`}>{viewingJob.status}</p>
+                                </div>
+                                <div className="card bg-white/3">
+                                    <p className="text-xs text-slate-500 mb-1">Job Type</p>
+                                    <p className="font-semibold text-white">{viewingJob.jobType.replace("_", " ")}</p>
+                                </div>
+                            </div>
+
+                            {viewingJob.notes && (
+                                <div>
+                                    <h4 className="text-sm font-semibold text-slate-300 mb-3 border-b border-white/10 pb-2">Service Notes</h4>
+                                    <div className="bg-white/5 rounded-xl p-4 text-sm text-slate-300 whitespace-pre-wrap border border-white/5">
+                                        {viewingJob.notes}
+                                    </div>
+                                </div>
+                            )}
+
+                            {viewingJob.insuranceCompany && (
+                                <div>
+                                    <h4 className="text-sm font-semibold text-slate-300 mb-2">Insurance</h4>
+                                    <div className="bg-red-500/10 border border-red-500/20 text-red-200 rounded-lg p-3 text-sm">
+                                        {viewingJob.insuranceCompany}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Images section */}
+                            <div>
+                                <h4 className="text-sm font-semibold text-slate-300 mb-3 border-b border-white/10 pb-2">Photos ({viewingJob.images?.length || 0})</h4>
+                                {viewingJob.images && viewingJob.images.length > 0 ? (
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                                        {viewingJob.images.map((img: any) => (
+                                            <div key={img.id} className="relative group">
+                                                <a href={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${img.url}`} target="_blank" rel="noopener noreferrer">
+                                                    <img
+                                                        src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${img.url}`}
+                                                        alt="Job reference"
+                                                        className="rounded-lg aspect-square object-cover w-full hover:scale-[1.02] transition-transform bg-slate-800"
+                                                    />
+                                                </a>
+                                                <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-medium text-white border border-white/20">
+                                                    {img.phase}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-sm text-slate-500 italic">No photos attached.</p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
         </DashboardLayout>

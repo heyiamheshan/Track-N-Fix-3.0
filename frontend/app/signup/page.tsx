@@ -69,7 +69,7 @@ export default function SignupPage() {
 
             <div className="w-full max-w-md animate-fade-in">
                 <div className="text-center mb-8">
-                    <img src="/logo.jpg" alt="TrackNFix Logo" className="w-24 h-24 object-contain rounded-3xl mb-4 bg-white/5 shadow-xl shadow-blue-500/10" />
+                    <img src="/logo.jpg" alt="TrackNFix Logo" className="mx-auto block w-24 h-24 object-cover rounded-3xl mb-4 shadow-xl shadow-blue-500/10" />
                     <h1 className="text-3xl font-bold text-white">TrackNFix</h1>
                     <p className="text-slate-400 mt-1 text-sm">Create your account</p>
                 </div>

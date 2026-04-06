@@ -39,7 +39,7 @@ export default function DashboardLayout({ children, title, subtitle, actions }: 
             <header className="glass border-b border-white/8 sticky top-0 z-50">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                        <img src="/logo.jpg" alt="TrackNFix" className="w-8 h-8 md:w-9 md:h-9 object-contain rounded-lg shrink-0 shadow-lg shadow-blue-500/20 bg-white/5" />
+                        <img src="/logo.jpg" alt="TrackNFix" className="w-8 h-8 md:w-9 md:h-9 object-cover rounded-lg shrink-0 shadow-lg shadow-blue-500/20" />
                         <div>
                             <span className="font-bold text-white text-sm">TrackNFix</span>
                             <span className="text-slate-600 text-xs ml-1">3.0</span>

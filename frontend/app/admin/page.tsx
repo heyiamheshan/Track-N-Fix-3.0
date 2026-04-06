@@ -164,7 +164,7 @@ export default function AdminDashboard() {
                     { key: "requests", label: "Employee Requests", icon: <FileText className="w-3.5 h-3.5" />, count: jobs.length },
                     { key: "quotations", label: "Quotations", icon: <Edit3 className="w-3.5 h-3.5" />, count: quotations.length },
                     { key: "notifications", label: "Notifications", icon: <Bell className="w-3.5 h-3.5" />, count: unreadCount },
-                    { key: "search", label: "Search Records", icon: <Search className="w-3.5 h-3.5" /> },
+                    { key: "search", label: "Search Records", icon: <Search className="w-3.5 h-3.5" />, count: undefined as number | undefined },
                 ] as const).map(t => (
                     <button
                         key={t.key}

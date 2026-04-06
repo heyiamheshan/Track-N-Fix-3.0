@@ -6,7 +6,7 @@ import { z } from "zod";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { authAPI } from "@/lib/api";
-import { Car, UserPlus, Lock } from "lucide-react";
+import { Car, UserPlus } from "lucide-react";
 
 const schema = z.object({
     name: z.string().min(2, "Name must be at least 2 characters"),
@@ -107,7 +107,6 @@ export default function SignupPage() {
                                         <label key={role} className={`relative flex flex-col items-center gap-1.5 p-3 rounded-xl border cursor-pointer transition-all duration-200 text-center ${unavailable ? "opacity-40 cursor-not-allowed border-white/5 bg-white/3" : selectedRole === role ? "border-blue-500/50 bg-blue-600/15 text-blue-300" : "border-white/10 bg-white/5 hover:bg-white/8 text-slate-400"}`}>
                                             <input type="radio" value={role} {...register("role")} className="sr-only" disabled={unavailable || loading} />
                                             <span className="text-xs font-medium">{role === "EMPLOYEE" ? "Employee" : role === "ADMIN" ? "Admin" : "Manager"}</span>
-                                            {unavailable && <span className="text-[10px] text-red-400">Full (max 2)</span>}
                                         </label>
                                     );
                                 })}
@@ -118,10 +117,6 @@ export default function SignupPage() {
                             <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-400 text-sm">{error}</div>
                         )}
 
-                        <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-3 text-amber-400 text-xs flex items-start gap-2">
-                            <Lock className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                            <span>Only 2 admins and 2 managers allowed. Employees can sign up freely.</span>
-                        </div>
 
                         <button type="submit" className="btn-primary w-full" disabled={loading || roleUnavailable(selectedRole)}>
                             {loading ? "Creating account…" : "Create Account"}

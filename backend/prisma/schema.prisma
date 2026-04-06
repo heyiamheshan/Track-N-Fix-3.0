@@ -1,0 +1,153 @@
+// This is your Prisma schema file
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  EMPLOYEE
+  ADMIN
+  MANAGER
+}
+
+enum JobType {
+  SERVICE
+  REPAIR
+  ACCIDENT_RECOVERY
+}
+
+enum JobStatus {
+  DRAFT
+  SUBMITTED
+  REVIEWED
+  QUOTED
+  FINALIZED
+}
+
+enum ImagePhase {
+  BEFORE
+  AFTER
+  PART
+}
+
+enum QuotationStatus {
+  DRAFT
+  SENT_TO_MANAGER
+  FINALIZED
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobs          Job[]
+  adminQuotations  Quotation[] @relation("AdminQuotations")
+  managerQuotations Quotation[] @relation("ManagerQuotations")
+  notifications Notification[]
+}
+
+model Vehicle {
+  id            String   @id @default(uuid())
+  vehicleNumber String   @unique
+  ownerName     String?
+  address       String?
+  telephone     String?
+  vehicleType   String?
+  color         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  jobs       Job[]
+  quotations Quotation[]
+}
+
+model Job {
+  id               String    @id @default(uuid())
+  jobNumber        Int       @unique @default(autoincrement())
+  vehicleId        String
+  employeeId       String
+  jobType          JobType
+  status           JobStatus @default(DRAFT)
+  notes            String?
+  insuranceCompany String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  vehicle    Vehicle    @relation(fields: [vehicleId], references: [id])
+  employee   User       @relation(fields: [employeeId], references: [id])
+  images     JobImage[]
+  quotations Quotation[]
+}
+
+model JobImage {
+  id        String     @id @default(uuid())
+  jobId     String
+  phase     ImagePhase
+  url       String
+  caption   String?
+  createdAt DateTime   @default(now())
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+}
+
+model Quotation {
+  id               String          @id @default(uuid())
+  jobId            String
+  vehicleId        String
+  adminId          String
+  managerId        String?
+  vehicleNumber    String
+  ownerName        String?
+  address          String?
+  telephone        String?
+  vehicleType      String?
+  color            String?
+  insuranceCompany String?
+  jobDetails       String?
+  totalAmount      Float?
+  pdfUrl           String?
+  status           QuotationStatus @default(DRAFT)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  job     Job              @relation(fields: [jobId], references: [id])
+  vehicle Vehicle          @relation(fields: [vehicleId], references: [id])
+  admin   User             @relation("AdminQuotations", fields: [adminId], references: [id])
+  manager User?            @relation("ManagerQuotations", fields: [managerId], references: [id])
+  items   QuotationItem[]
+}
+
+model QuotationItem {
+  id           String  @id @default(uuid())
+  quotationId  String
+  description  String
+  partReplaced String?
+  price        Float   @default(0)
+  laborCost    Float   @default(0)
+
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id            String   @id @default(uuid())
+  fromRole      Role
+  toRole        Role
+  message       String
+  vehicleNumber String?
+  quotationId   String?
+  userId        String?
+  isRead        Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+}

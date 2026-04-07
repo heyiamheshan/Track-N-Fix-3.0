@@ -12,14 +12,13 @@ const schema = z.object({
     name: z.string().min(2, "Name must be at least 2 characters"),
     email: z.string().email("Invalid email"),
     password: z.string().min(6, "Password must be at least 6 characters"),
-    role: z.enum(["EMPLOYEE", "ADMIN", "MANAGER"]),
+    role: z.enum(["ADMIN", "MANAGER"]),
 });
 type FormData = z.infer<typeof schema>;
 
 interface RoleAvailability {
     ADMIN: { count: number; available: boolean };
     MANAGER: { count: number; available: boolean };
-    EMPLOYEE: { available: boolean };
 }
 
 export default function SignupPage() {
@@ -30,7 +29,7 @@ export default function SignupPage() {
 
     const { register, handleSubmit, watch, formState: { errors } } = useForm<FormData>({
         resolver: zodResolver(schema),
-        defaultValues: { role: "EMPLOYEE" },
+        defaultValues: { role: "ADMIN" },
     });
 
     const selectedRole = watch("role");
@@ -98,13 +97,13 @@ export default function SignupPage() {
                         </div>
                         <div>
                             <label className="block text-sm text-slate-400 mb-2">Role</label>
-                            <div className="grid grid-cols-3 gap-2">
-                                {(["EMPLOYEE", "ADMIN", "MANAGER"] as const).map(role => {
+                            <div className="grid grid-cols-2 gap-2">
+                                {(["ADMIN", "MANAGER"] as const).map(role => {
                                     const unavailable = roleUnavailable(role);
                                     return (
                                         <label key={role} className={`relative flex flex-col items-center gap-1.5 p-3 rounded-xl border cursor-pointer transition-all duration-200 text-center ${unavailable ? "opacity-40 cursor-not-allowed border-white/5 bg-white/3" : selectedRole === role ? "border-blue-500/50 bg-blue-600/15 text-blue-300" : "border-white/10 bg-white/5 hover:bg-white/8 text-slate-400"}`}>
                                             <input type="radio" value={role} {...register("role")} className="sr-only" disabled={unavailable || loading} />
-                                            <span className="text-xs font-medium">{role === "EMPLOYEE" ? "Employee" : role === "ADMIN" ? "Admin" : "Manager"}</span>
+                                            <span className="text-xs font-medium">{role === "ADMIN" ? "Admin" : "Manager"}</span>
                                         </label>
                                     );
                                 })}

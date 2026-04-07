@@ -289,6 +289,7 @@ export default function ManagerDashboard() {
                                             </span>
                                         </div>
                                         <p className="text-xs text-slate-500">{emp.email}</p>
+                                        <p className="text-xs text-slate-600">{emp.nicNumber || "No NIC"} · {emp.address ? emp.address.slice(0, 40) : "No Address"}</p>
                                     </div>
                                 </div>
                                 <span className="text-xs text-slate-400 ml-auto">{emp._count?.jobs || 0} jobs submitted</span>

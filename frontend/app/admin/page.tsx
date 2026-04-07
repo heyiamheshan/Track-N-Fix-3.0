@@ -406,7 +406,7 @@ export default function AdminDashboard() {
                                                 {emp.isFirstLogin && <span className="px-2 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300">First Login Pending</span>}
                                             </div>
                                             <p className="text-xs text-slate-500">{emp.email}</p>
-                                            <p className="text-xs text-slate-600">{emp.nicNumber} · {emp.address?.slice(0, 40)}</p>
+                                            <p className="text-xs text-slate-600">{emp.nicNumber || "No NIC"} · {emp.address ? emp.address.slice(0, 40) : "No Address"}</p>
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-3 ml-auto">

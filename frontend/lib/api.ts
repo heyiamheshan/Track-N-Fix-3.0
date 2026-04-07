@@ -21,6 +21,10 @@ export const authAPI = {
     signup: (data: object) => api.post("/auth/signup", data),
     signin: (data: object) => api.post("/auth/signin", data),
     roleAvailability: () => api.get("/auth/role-availability"),
+    changePassword: (data: object) => api.post("/auth/change-password", data),
+    forgotPassword: (data: object) => api.post("/auth/forgot-password", data),
+    verifyOtp: (data: object) => api.post("/auth/verify-otp", data),
+    resetPassword: (data: object) => api.post("/auth/reset-password", data),
 };
 
 // Jobs

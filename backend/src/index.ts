@@ -28,6 +28,8 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 const uploadsDir = path.join(__dirname, '..', process.env.UPLOAD_DIR || 'uploads');
 app.use('/uploads', express.static(uploadsDir));
 
+import employeeRoutes from './routes/employees';
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
@@ -36,6 +38,7 @@ app.use('/api/quotations', quotationRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/employees', employeeRoutes);
 
 app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', message: 'TrackNFix API running', timestamp: new Date().toISOString() });

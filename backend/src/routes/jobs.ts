@@ -134,10 +134,10 @@ router.put('/:id', authenticate, requireRole('EMPLOYEE'), async (req: AuthReques
         if (job.employeeId !== req.user!.id) { res.status(403).json({ error: 'Not your job' }); return; }
         if (job.status !== 'DRAFT') { res.status(400).json({ error: 'Cannot edit submitted job' }); return; }
 
-        const { notes, insuranceCompany, jobType } = req.body;
+        const { notes, voiceNoteUrl, insuranceCompany, jobType } = req.body;
         const updated = await prisma.job.update({
             where: { id: req.params.id },
-            data: { notes, insuranceCompany, jobType },
+            data: { notes, voiceNoteUrl, insuranceCompany, jobType },
             include: { vehicle: true, images: true },
         });
         res.json(updated);

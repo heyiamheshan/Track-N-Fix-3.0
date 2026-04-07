@@ -14,7 +14,7 @@ interface QuotationItem {
 }
 
 interface Job {
-    id: string; jobNumber: number; jobType: string; notes: string; status: string;
+    id: string; jobNumber: number; jobType: string; notes: string; status: string; voiceNoteUrl?: string;
     employee: { name: string }; images: { id: string; url: string; phase: string }[];
     insuranceCompany?: string; createdAt: string;
 }
@@ -421,10 +421,20 @@ export default function ManagerDashboard() {
                         </div>
 
                         {/* Employee notes (read-only) */}
-                        {editQ.job.notes && (
-                            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 mb-4">
-                                <p className="text-xs text-amber-400 font-medium mb-1">Work Notes (from employee)</p>
-                                <p className="text-sm text-slate-300 whitespace-pre-wrap">{editQ.job.notes}</p>
+                        {(editQ.job.notes || editQ.job.voiceNoteUrl) && (
+                            <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 mb-6">
+                                {editQ.job.notes && (
+                                    <>
+                                        <p className="text-xs text-amber-400 font-medium mb-1">Work Notes (from employee)</p>
+                                        <p className="text-sm text-slate-300 whitespace-pre-wrap">{editQ.job.notes}</p>
+                                    </>
+                                )}
+                                {editQ.job.voiceNoteUrl && (
+                                    <div className={`mt-3 pt-3 ${editQ.job.notes ? "border-t border-amber-500/10" : ""}`}>
+                                        <p className="text-xs text-amber-400 font-medium mb-2">Voice Note</p>
+                                        <audio className="w-full h-8" controls src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${editQ.job.voiceNoteUrl}`} />
+                                    </div>
+                                )}
                             </div>
                         )}
 

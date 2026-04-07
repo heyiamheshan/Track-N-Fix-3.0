@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import ImageUploader from "@/components/ImageUploader";
-import { jobsAPI } from "@/lib/api";
+import { jobsAPI, voiceAPI } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Plus, Send, CheckCircle, Wrench, Car, Zap, AlertTriangle, FileText, Clock, ChevronRight, Eye, X } from "lucide-react";
 
@@ -39,6 +39,11 @@ export default function EmployeeDashboard() {
     const [historyLoading, setHistoryLoading] = useState(false);
     const [viewingJob, setViewingJob] = useState<any | null>(null);
 
+    const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+    const [audioUrl, setAudioUrl] = useState<string | null>(null);
+    const [isRecording, setIsRecording] = useState(false);
+    const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+
     useEffect(() => {
         if (tab === "history") {
             setHistoryLoading(true);
@@ -65,12 +70,61 @@ export default function EmployeeDashboard() {
         }
     };
 
+    const startRecording = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const recorder = new MediaRecorder(stream);
+            const chunks: BlobPart[] = [];
+
+            recorder.ondataavailable = (e) => {
+                if (e.data.size > 0) chunks.push(e.data);
+            };
+
+            recorder.onstop = () => {
+                const mimeType = recorder.mimeType || "audio/webm";
+                const blob = new Blob(chunks, { type: mimeType });
+                setAudioBlob(blob);
+                setAudioUrl(URL.createObjectURL(blob));
+                stream.getTracks().forEach(track => track.stop());
+            };
+
+            recorder.start(100); // Safari needs timeslices or might fail to fire ondataavailable
+            setMediaRecorder(recorder);
+            setIsRecording(true);
+        } catch (err) {
+            console.error(err);
+            setError("Could not access microphone.");
+        }
+    };
+
+    const stopRecording = () => {
+        if (mediaRecorder && isRecording) {
+            mediaRecorder.stop();
+            setIsRecording(false);
+        }
+    };
+
+    const clearAudio = () => {
+        setAudioBlob(null);
+        if (audioUrl) URL.revokeObjectURL(audioUrl);
+        setAudioUrl(null);
+    };
+
     const submitJob = async () => {
         if (!job) return;
         setLoading(true);
         setError("");
         try {
-            await jobsAPI.update(job.id, { notes, insuranceCompany });
+            let voiceNoteUrl = undefined;
+            if (audioBlob) {
+                const formData = new FormData();
+                const ext = audioBlob.type.includes("mp4") ? ".mp4" : ".webm";
+                formData.append("voice", audioBlob, `voice-note${ext}`);
+                const res = await voiceAPI.upload(formData);
+                voiceNoteUrl = res.data.url;
+            }
+
+            await jobsAPI.update(job.id, { notes, insuranceCompany, voiceNoteUrl });
             await jobsAPI.submit(job.id);
             setStep("done");
         } catch {
@@ -88,6 +142,7 @@ export default function EmployeeDashboard() {
         setInsuranceCompany("");
         setBeforeImages([]);
         setAfterImages([]);
+        clearAudio();
         setError("");
     };
 
@@ -353,6 +408,33 @@ export default function EmployeeDashboard() {
                                             <input value={insuranceCompany} onChange={e => setInsuranceCompany(e.target.value)} placeholder="Insurance company name" className="input-field" />
                                         </div>
                                     )}
+
+                                    <div>
+                                        <label className="block text-sm text-slate-400 mb-1.5">Voice Note (Optional)</label>
+                                        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                                            {!audioUrl ? (
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-sm text-slate-400">Record a brief explanation of the issue</span>
+                                                    <button
+                                                        onClick={isRecording ? stopRecording : startRecording}
+                                                        className={`btn-secondary text-sm ${isRecording ? "bg-red-500/20 text-red-400 border-red-500/50 hover:bg-red-500/30" : ""}`}
+                                                    >
+                                                        {isRecording ? "⏹ Stop Recording" : "🎤 Start Recording"}
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center gap-4">
+                                                    <audio src={audioUrl} controls className="h-10 flex-1" />
+                                                    <button onClick={clearAudio} className="btn-secondary text-sm bg-red-500/10 text-red-400 hover:bg-red-500/20 border-0">
+                                                        <X className="w-4 h-4" />
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {isRecording && <div className="mt-3 flex items-center gap-2 text-xs text-red-400 animate-pulse">
+                                                <div className="w-2 h-2 rounded-full bg-red-500"></div> Recording in progress...
+                                            </div>}
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 
@@ -394,9 +476,9 @@ export default function EmployeeDashboard() {
                                 <div className="card bg-white/3">
                                     <p className="text-xs text-slate-500 mb-1">Status</p>
                                     <p className={`font-semibold ${viewingJob.status === "DRAFT" ? "text-slate-300" :
-                                            viewingJob.status === "SUBMITTED" ? "text-blue-300" :
-                                                viewingJob.status === "REVIEWED" ? "text-amber-300" :
-                                                    "text-emerald-300"
+                                        viewingJob.status === "SUBMITTED" ? "text-blue-300" :
+                                            viewingJob.status === "REVIEWED" ? "text-amber-300" :
+                                                "text-emerald-300"
                                         }`}>{viewingJob.status}</p>
                                 </div>
                                 <div className="card bg-white/3">
@@ -408,9 +490,15 @@ export default function EmployeeDashboard() {
                             {viewingJob.notes && (
                                 <div>
                                     <h4 className="text-sm font-semibold text-slate-300 mb-3 border-b border-white/10 pb-2">Service Notes</h4>
-                                    <div className="bg-white/5 rounded-xl p-4 text-sm text-slate-300 whitespace-pre-wrap border border-white/5">
+                                    <div className="bg-white/5 rounded-xl p-4 text-sm text-slate-300 whitespace-pre-wrap border border-white/5 mb-3">
                                         {viewingJob.notes}
                                     </div>
+                                    {viewingJob.voiceNoteUrl && (
+                                        <div className="mt-2 text-slate-400">
+                                            <p className="text-xs mb-1">Attached Voice Note</p>
+                                            <audio src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${viewingJob.voiceNoteUrl}`} controls className="w-full h-10" />
+                                        </div>
+                                    )}
                                 </div>
                             )}
 

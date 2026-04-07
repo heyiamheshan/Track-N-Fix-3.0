@@ -8,7 +8,7 @@ import { Eye, ChevronRight, Send, Plus, Edit3, Search, Bell, X, Check, FileText,
 type Tab = "requests" | "quotations" | "notifications" | "search" | "employees";
 
 interface Job {
-    id: string; jobNumber: number; jobType: string; status: string; notes: string;
+    id: string; jobNumber: number; jobType: string; status: string; notes: string; voiceNoteUrl?: string;
     createdAt: string; vehicle: { vehicleNumber: string; ownerName?: string };
     employee: { name: string }; images: { id: string; url: string; phase: string }[];
     insuranceCompany?: string;
@@ -511,10 +511,20 @@ export default function AdminDashboard() {
                             <div><p className="text-slate-500 text-xs">Employee</p><p className="text-white">{reviewJob.employee.name}</p></div>
                             <div><p className="text-slate-500 text-xs">Date</p><p className="text-white">{formatDate(reviewJob.createdAt)}</p></div>
                         </div>
-                        {reviewJob.notes && (
-                            <div className="bg-white/5 rounded-xl p-4 mb-4">
-                                <p className="text-xs text-slate-500 mb-1">Notes / Work Done</p>
-                                <p className="text-sm text-slate-200 whitespace-pre-wrap">{reviewJob.notes}</p>
+                        {(reviewJob.notes || reviewJob.voiceNoteUrl) && (
+                            <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4">
+                                {reviewJob.notes && (
+                                    <>
+                                        <p className="text-xs text-slate-500 mb-1">Notes / Work Done</p>
+                                        <p className="text-sm text-slate-200 whitespace-pre-wrap">{reviewJob.notes}</p>
+                                    </>
+                                )}
+                                {reviewJob.voiceNoteUrl && (
+                                    <div className="mt-3 pt-3 border-t border-white/10">
+                                        <p className="text-xs text-slate-500 mb-2">Attached Voice Note</p>
+                                        <audio className="w-full h-8" controls src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${reviewJob.voiceNoteUrl}`} />
+                                    </div>
+                                )}
                             </div>
                         )}
                         {reviewJob.insuranceCompany && (
@@ -563,11 +573,20 @@ export default function AdminDashboard() {
                         </div>
 
                         {/* Employee info read-only */}
-                        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 mb-4">
-                            <p className="text-xs text-amber-400 font-medium mb-1">Employee Notes (Read Only)</p>
-                            <p className="text-sm text-slate-300 whitespace-pre-wrap">{quotationJob.notes || "No notes"}</p>
-                            <p className="text-xs text-slate-500 mt-2">Job Type: {JOB_TYPE_LABELS[quotationJob.jobType]}</p>
-                        </div>
+                        {(quotationJob.notes || quotationJob.voiceNoteUrl) && (
+                            <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 text-sm mt-3 mb-4">
+                                <p className="text-xs text-amber-400 font-medium mb-1">Employee Notes (Read Only)</p>
+                                {quotationJob.notes && <p className="text-sm text-slate-300 whitespace-pre-wrap">{quotationJob.notes}</p>}
+                                {!quotationJob.notes && !quotationJob.voiceNoteUrl && <p className="text-sm text-slate-500">No notes provided</p>}
+                                {quotationJob.voiceNoteUrl && (
+                                    <div className="mt-3 pt-3 border-t border-amber-500/10">
+                                        <p className="text-xs text-amber-400 font-medium mb-2">Voice Note</p>
+                                        <audio className="w-full h-8" controls src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${quotationJob.voiceNoteUrl}`} />
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        <p className="text-xs text-slate-500 mt-2">Job Type: {JOB_TYPE_LABELS[quotationJob.jobType]}</p>
 
                         {/* Vehicle details */}
                         <div className="grid grid-cols-2 gap-3 mb-4">

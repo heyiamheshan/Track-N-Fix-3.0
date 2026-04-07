@@ -44,6 +44,12 @@ export const imagesAPI = {
     delete: (id: string) => api.delete(`/images/${id}`),
 };
 
+// Voice
+export const voiceAPI = {
+    upload: (formData: FormData) =>
+        api.post("/voice/upload", formData, { headers: { "Content-Type": "multipart/form-data" } }),
+};
+
 // Quotations
 export const quotationsAPI = {
     create: (data: object) => api.post("/quotations", data),

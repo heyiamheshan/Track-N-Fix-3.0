@@ -12,6 +12,7 @@ import quotationRoutes from './routes/quotations';
 import vehicleRoutes from './routes/vehicles';
 import searchRoutes from './routes/search';
 import notificationRoutes from './routes/notifications';
+import voiceRoutes from './routes/voice';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -39,6 +40,7 @@ app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/employees', employeeRoutes);
+app.use('/api/voice', voiceRoutes);
 
 app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', message: 'TrackNFix API running', timestamp: new Date().toISOString() });

@@ -71,7 +71,7 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response): Promise<v
         const where = role === 'EMPLOYEE'
             ? { employeeId: req.user!.id }
             : role === 'ADMIN'
-                ? { status: { in: ['SUBMITTED', 'REVIEWED', 'QUOTED'] as const } }
+                ? { status: { in: ['SUBMITTED', 'REVIEWED', 'QUOTED'] as Array<'SUBMITTED' | 'REVIEWED' | 'QUOTED'> } }
                 : {};
 
         const jobs = await prisma.job.findMany({

@@ -73,3 +73,11 @@ export const notificationsAPI = {
     markRead: (id: string) => api.put(`/notifications/${id}/read`),
     delete: (id: string) => api.delete(`/notifications/${id}`),
 };
+
+// Employees
+export const employeesAPI = {
+    list: () => api.get("/employees"),
+    create: (data: object) => api.post("/employees", data),
+    toggleStatus: (id: string, isActive: boolean) =>
+        api.patch(`/employees/${id}/status`, { isActive }),
+};

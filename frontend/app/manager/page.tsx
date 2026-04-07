@@ -1,13 +1,13 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
-import { quotationsAPI, notificationsAPI } from "@/lib/api";
+import { quotationsAPI, notificationsAPI, employeesAPI } from "@/lib/api";
 import { formatDate, JOB_TYPE_LABELS } from "@/lib/utils";
-import { Edit3, Download, Bell, Search, X, Plus, CheckCircle, FileText, DollarSign } from "lucide-react";
+import { Edit3, Download, Bell, Search, X, Plus, CheckCircle, FileText, DollarSign, Users } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-type Tab = "quotations" | "search";
+type Tab = "quotations" | "search" | "employees";
 
 interface QuotationItem {
     id?: string; description: string; partReplaced?: string; price: number; laborCost: number;
@@ -36,6 +36,8 @@ export default function ManagerDashboard() {
     const [editItems, setEditItems] = useState<QuotationItem[]>([]);
     const [loading, setLoading] = useState(false);
     const [finalizing, setFinalizing] = useState(false);
+    const [employees, setEmployees] = useState<any[]>([]);
+    const [empLoading, setEmpLoading] = useState(false);
 
     // Search
     const [searchQ, setSearchQ] = useState("");
@@ -55,6 +57,13 @@ export default function ManagerDashboard() {
     }, []);
 
     useEffect(() => { fetchData(); }, [fetchData]);
+
+    useEffect(() => {
+        if (tab === "employees") {
+            setEmpLoading(true);
+            employeesAPI.list().then(r => setEmployees(r.data)).finally(() => setEmpLoading(false));
+        }
+    }, [tab]);
 
     const openEdit = (q: Quotation) => {
         setEditQ(q);
@@ -239,6 +248,7 @@ export default function ManagerDashboard() {
                 {([
                     { key: "quotations", label: "Requested Quotations", icon: <FileText className="w-3.5 h-3.5" />, count: quotations.length as number | undefined },
                     { key: "search", label: "Search Records", icon: <Search className="w-3.5 h-3.5" />, count: undefined as number | undefined },
+                    { key: "employees", label: "Employees", icon: <Users className="w-3.5 h-3.5" />, count: undefined as number | undefined },
                 ] as const).map(t => (
                     <button key={t.key} onClick={() => setTab(t.key as Tab)} className={`tab-btn flex items-center gap-1.5 ${tab === t.key ? "active" : ""}`}>
                         {t.icon}{t.label}
@@ -254,7 +264,42 @@ export default function ManagerDashboard() {
                 )}
             </div>
 
+            {/* ── EMPLOYEES (read-only) ── */}
+            {tab === "employees" && (
+                <div className="space-y-4 animate-fade-in">
+                    <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl px-4 py-3 text-blue-300 text-sm">
+                        View-only: Employee management (create/deactivate) is available in the Admin dashboard.
+                    </div>
+                    {empLoading && <div className="text-center py-8 text-slate-500">Loading…</div>}
+                    {!empLoading && employees.length === 0 && (
+                        <div className="card text-center py-10 text-slate-500">No employees found.</div>
+                    )}
+                    <div className="space-y-3">
+                        {employees.map(emp => (
+                            <div key={emp.id} className="card flex items-center justify-between gap-4 flex-wrap">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-10 h-10 rounded-full bg-blue-600/20 border border-blue-500/30 flex items-center justify-center flex-shrink-0">
+                                        <span className="text-blue-400 font-bold text-sm">{emp.name[0]}</span>
+                                    </div>
+                                    <div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-medium text-white text-sm">{emp.name}</span>
+                                            <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${emp.isActive ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"}`}>
+                                                {emp.isActive ? "Active" : "Inactive"}
+                                            </span>
+                                        </div>
+                                        <p className="text-xs text-slate-500">{emp.email}</p>
+                                    </div>
+                                </div>
+                                <span className="text-xs text-slate-400 ml-auto">{emp._count?.jobs || 0} jobs submitted</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {/* ── QUOTATIONS ── */}
+
             {tab === "quotations" && (
                 <div className="space-y-4 animate-fade-in">
                     {loading && <div className="text-center text-slate-500 py-10">Loading…</div>}

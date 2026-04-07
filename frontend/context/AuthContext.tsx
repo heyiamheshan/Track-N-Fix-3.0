@@ -8,6 +8,7 @@ interface User {
     name: string;
     email: string;
     role: "EMPLOYEE" | "ADMIN" | "MANAGER";
+    isFirstLogin?: boolean;
 }
 
 interface AuthContextType {
@@ -41,6 +42,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setToken(token);
         localStorage.setItem("tnf_token", token);
         localStorage.setItem("tnf_user", JSON.stringify(user));
+
+        // First-login employees must change their password before anything else
+        if (user.isFirstLogin) {
+            router.push("/change-password");
+            return;
+        }
 
         // Redirect based on role
         if (user.role === "EMPLOYEE") router.push("/employee");

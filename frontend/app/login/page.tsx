@@ -81,7 +81,12 @@ export default function LoginPage() {
                     </form>
 
                     <p className="text-center text-slate-500 text-sm mt-6">
-                        New to TrackNFix?{" "}
+                        <Link href="/forgot-password" className="text-blue-400 hover:text-blue-300">
+                            Forgot password?
+                        </Link>
+                    </p>
+                    <p className="text-center text-slate-500 text-sm mt-2">
+                        New admin/manager?{" "}
                         <Link href="/signup" className="text-blue-400 hover:text-blue-300 font-medium">
                             Create account
                         </Link>

@@ -1,11 +1,11 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
-import { jobsAPI, quotationsAPI, vehiclesAPI, notificationsAPI } from "@/lib/api";
+import { jobsAPI, quotationsAPI, vehiclesAPI, notificationsAPI, employeesAPI } from "@/lib/api";
 import { formatDate, JOB_TYPE_LABELS } from "@/lib/utils";
-import { Eye, ChevronRight, Send, Plus, Edit3, Search, Bell, X, Check, FileText, Clock } from "lucide-react";
+import { Eye, ChevronRight, Send, Plus, Edit3, Search, Bell, X, Check, FileText, Clock, Users, UserCheck, UserX } from "lucide-react";
 
-type Tab = "requests" | "quotations" | "notifications" | "search";
+type Tab = "requests" | "quotations" | "notifications" | "search" | "employees";
 
 interface Job {
     id: string; jobNumber: number; jobType: string; status: string; notes: string;
@@ -41,6 +41,13 @@ export default function AdminDashboard() {
     const [quotations, setQuotations] = useState<Quotation[]>([]);
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [loading, setLoading] = useState(false);
+
+    // Employees
+    const [employees, setEmployees] = useState<any[]>([]);
+    const [empLoading, setEmpLoading] = useState(false);
+    const [empForm, setEmpForm] = useState({ name: "", email: "", nicNumber: "", address: "", password: "" });
+    const [empError, setEmpError] = useState("");
+    const [empSubmitting, setEmpSubmitting] = useState(false);
 
     // Review modal
     const [reviewJob, setReviewJob] = useState<Job | null>(null);
@@ -85,6 +92,34 @@ export default function AdminDashboard() {
         setLoading(true);
         Promise.all([fetchJobs(), fetchQuotations(), fetchNotifications()]).finally(() => setLoading(false));
     }, [fetchJobs, fetchQuotations, fetchNotifications]);
+
+    useEffect(() => {
+        if (tab === "employees") {
+            setEmpLoading(true);
+            employeesAPI.list().then(r => setEmployees(r.data)).finally(() => setEmpLoading(false));
+        }
+    }, [tab]);
+
+    const handleCreateEmployee = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setEmpError("");
+        setEmpSubmitting(true);
+        try {
+            await employeesAPI.create(empForm);
+            setEmpForm({ name: "", email: "", nicNumber: "", address: "", password: "" });
+            const res = await employeesAPI.list();
+            setEmployees(res.data);
+        } catch (err: any) {
+            setEmpError(err?.response?.data?.error || "Failed to create employee");
+        } finally {
+            setEmpSubmitting(false);
+        }
+    };
+
+    const toggleEmployeeStatus = async (id: string, current: boolean) => {
+        await employeesAPI.toggleStatus(id, !current);
+        setEmployees(prev => prev.map(e => e.id === id ? { ...e, isActive: !current } : e));
+    };
 
     const handleReview = async (job: Job) => {
         await jobsAPI.review(job.id);
@@ -165,6 +200,7 @@ export default function AdminDashboard() {
                     { key: "quotations", label: "Quotations", icon: <Edit3 className="w-3.5 h-3.5" />, count: quotations.length },
                     { key: "notifications", label: "Notifications", icon: <Bell className="w-3.5 h-3.5" />, count: unreadCount },
                     { key: "search", label: "Search Records", icon: <Search className="w-3.5 h-3.5" />, count: undefined as number | undefined },
+                    { key: "employees", label: "Employees", icon: <Users className="w-3.5 h-3.5" />, count: undefined as number | undefined },
                 ] as const).map(t => (
                     <button
                         key={t.key}
@@ -303,6 +339,87 @@ export default function AdminDashboard() {
                             <button onClick={sendCustomerNotif} disabled={sendingNotif || !notifMessage.trim()} className="btn-success text-sm">
                                 <Send className="w-3.5 h-3.5 inline mr-1.5" />Send to Customer
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── EMPLOYEE MANAGEMENT ── */}
+            {tab === "employees" && (
+                <div className="space-y-6 animate-fade-in">
+                    {/* Create employee form */}
+                    <div className="card border-blue-500/20">
+                        <h3 className="text-sm font-semibold text-blue-300 mb-4 flex items-center gap-2">
+                            <Plus className="w-4 h-4" />Create New Employee Account
+                        </h3>
+                        <form onSubmit={handleCreateEmployee} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">Full Name *</label>
+                                <input value={empForm.name} onChange={e => setEmpForm(f => ({ ...f, name: e.target.value }))} className="input-field text-sm" placeholder="John Silva" required />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">Email Address *</label>
+                                <input type="email" value={empForm.email} onChange={e => setEmpForm(f => ({ ...f, email: e.target.value }))} className="input-field text-sm" placeholder="john@example.com" required />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">NIC Number *</label>
+                                <input value={empForm.nicNumber} onChange={e => setEmpForm(f => ({ ...f, nicNumber: e.target.value }))} className="input-field text-sm font-mono" placeholder="199012345678" required />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">Temporary Password *</label>
+                                <input type="text" value={empForm.password} onChange={e => setEmpForm(f => ({ ...f, password: e.target.value }))} className="input-field text-sm font-mono" placeholder="Jayakody@2026" required />
+                            </div>
+                            <div className="sm:col-span-2">
+                                <label className="block text-xs text-slate-400 mb-1">Residential Address *</label>
+                                <input value={empForm.address} onChange={e => setEmpForm(f => ({ ...f, address: e.target.value }))} className="input-field text-sm" placeholder="No. 25, Main Street, Colombo" required />
+                            </div>
+                            {empError && <div className="sm:col-span-2 bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-400 text-sm">{empError}</div>}
+                            <div className="sm:col-span-2 flex justify-end">
+                                <button type="submit" className="btn-primary" disabled={empSubmitting}>
+                                    <Plus className="w-4 h-4 inline mr-1" />
+                                    {empSubmitting ? "Creating…" : "Create Employee Account"}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    {/* Employee list */}
+                    <div>
+                        <h3 className="text-sm font-semibold text-slate-300 mb-3">All Employees ({employees.length})</h3>
+                        {empLoading && <div className="text-center py-8 text-slate-500">Loading…</div>}
+                        {!empLoading && employees.length === 0 && (
+                            <div className="card text-center py-10 text-slate-500">No employee accounts yet.</div>
+                        )}
+                        <div className="space-y-3">
+                            {employees.map(emp => (
+                                <div key={emp.id} className="card flex items-center justify-between gap-4 flex-wrap hover:bg-white/5 transition-colors">
+                                    <div className="flex items-center gap-4">
+                                        <div className="w-10 h-10 rounded-full bg-blue-600/20 border border-blue-500/30 flex items-center justify-center flex-shrink-0">
+                                            <span className="text-blue-400 font-bold text-sm">{emp.name[0]}</span>
+                                        </div>
+                                        <div>
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-medium text-white text-sm">{emp.name}</span>
+                                                <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${emp.isActive ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"}`}>
+                                                    {emp.isActive ? "Active" : "Inactive"}
+                                                </span>
+                                                {emp.isFirstLogin && <span className="px-2 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300">First Login Pending</span>}
+                                            </div>
+                                            <p className="text-xs text-slate-500">{emp.email}</p>
+                                            <p className="text-xs text-slate-600">{emp.nicNumber} · {emp.address?.slice(0, 40)}</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3 ml-auto">
+                                        <span className="text-xs text-slate-500">{emp._count?.jobs || 0} jobs</span>
+                                        <button
+                                            onClick={() => toggleEmployeeStatus(emp.id, emp.isActive)}
+                                            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all ${emp.isActive ? "border-red-500/30 text-red-400 hover:bg-red-500/10" : "border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"}`}
+                                        >
+                                            {emp.isActive ? <><UserX className="w-3.5 h-3.5" />Deactivate</> : <><UserCheck className="w-3.5 h-3.5" />Activate</>}
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
                         </div>
                     </div>
                 </div>

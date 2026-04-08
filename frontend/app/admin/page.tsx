@@ -542,10 +542,11 @@ export default function AdminDashboard() {
                                         <div>
                                             <div className="flex items-center gap-2 flex-wrap mb-1">
                                                 <span className="font-medium text-white text-sm">{r.employee.name}</span>
-                                                <span className={`text-xs px-2 py-0.5 rounded font-medium ${r.type === "CHECKIN" ? "bg-emerald-500/20 text-emerald-300" : r.type === "CHECKOUT" ? "bg-blue-500/20 text-blue-300" : r.type === "EARLY_CHECKOUT" ? "bg-amber-500/20 text-amber-300" : r.type === "OVERTIME_START" ? "bg-purple-500/20 text-purple-300" : r.type === "OVERTIME_END" ? "bg-indigo-500/20 text-indigo-300" : "bg-slate-500/20 text-slate-300"}`}>
+                                                <span className={`text-xs px-2 py-0.5 rounded font-medium ${r.type === "CHECKIN" ? "bg-emerald-500/20 text-emerald-300" : r.type === "CHECKOUT" ? "bg-blue-500/20 text-blue-300" : r.type === "EARLY_CHECKOUT" ? "bg-amber-500/20 text-amber-300" : r.type === "OVERTIME_START" ? "bg-purple-500/20 text-purple-300" : r.type === "OVERTIME_END" ? "bg-indigo-500/20 text-indigo-300" : r.type === "LEAVE_END" ? "bg-cyan-500/20 text-cyan-300" : "bg-slate-500/20 text-slate-300"}`}>
                                                     {r.type.replace(/_/g, " ")}
                                                 </span>
                                                 {r.type === "EARLY_CHECKOUT" && <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />}
+                                                {r.type === "LEAVE_END" && <CheckCircle className="w-3.5 h-3.5 text-cyan-400" />}
                                             </div>
                                             <p className="text-xs text-slate-500">Requested: {new Date(r.requestedTime).toLocaleString()}</p>
                                             {r.reason && <p className="text-xs text-slate-400 mt-1">Reason: {r.reason}</p>}

@@ -5,6 +5,8 @@ import ImageUploader from "@/components/ImageUploader";
 import { jobsAPI, voiceAPI, attendanceAPI } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Plus, Send, CheckCircle, Wrench, Car, Zap, AlertTriangle, FileText, Clock, ChevronRight, Eye, X, CalendarClock, LogIn, LogOut, Coffee, Umbrella, Star, AlertCircle, Calendar } from "lucide-react";
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
 
 type JobType = "SERVICE" | "REPAIR" | "ACCIDENT_RECOVERY";
 type Step = "select_type" | "before_images" | "after_images" | "notes" | "done";
@@ -28,6 +30,7 @@ interface AttendanceToday {
     activeLeave: { id: string; leaveFrom: string; leaveTo: string; reason: string; leaveEndConfirmed: boolean } | null;
     activeOvertime: { id: string; overtimeStart: string; status: string } | null;
     holiday: { id: string; holidayDate: string; description: string } | null;
+    pendingReturnReq: any;
 }
 
 interface MyAttendance {
@@ -72,14 +75,49 @@ export default function EmployeeDashboard() {
     const [showOvertimeModal, setShowOvertimeModal] = useState(false);
     const [overtimeReason, setOvertimeReason] = useState("");
     const [showLeaveModal, setShowLeaveModal] = useState(false);
-    const [leaveForm, setLeaveForm] = useState({ leaveFrom: "", leaveTo: "", reason: "", leaveFromDate: "", leaveFromTime: "09:00", leaveToDate: "", leaveToTime: "18:00" });
+    const [leaveForm, setLeaveForm] = useState<{
+        leaveFromDate: Date | null;
+        leaveToDate: Date | null;
+        leaveFromTime: string;
+        leaveToTime: string;
+        reason: string;
+    }>({ leaveFromDate: null, leaveToDate: null, leaveFromTime: "09:00", leaveToTime: "18:00", reason: "" });
     const [showHolidayModal, setShowHolidayModal] = useState(false);
-    const [holidayForm, setHolidayForm] = useState({ holidayDate: "", description: "" });
+    const [holidayForm, setHolidayForm] = useState<{
+        holidayDate: Date | null;
+        description: string;
+    }>({ holidayDate: null, description: "" });
     const [showLeaveEndModal, setShowLeaveEndModal] = useState(false);
+    const [timeLeft, setTimeLeft] = useState("");
+
+    useEffect(() => {
+        if (!todayStatus?.activeLeave) return;
+        const leaveTo = new Date(todayStatus.activeLeave.leaveTo).getTime();
+        const interval = setInterval(() => {
+            const now = new Date().getTime();
+            const diff = leaveTo - now;
+            if (diff <= 0) {
+                setTimeLeft("Leave duration complete");
+                clearInterval(interval);
+            } else {
+                const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+                const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)).toString().padStart(2, '0');
+                const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60)).toString().padStart(2, '0');
+                const secs = Math.floor((diff % (1000 * 60)) / 1000).toString().padStart(2, '0');
+                setTimeLeft(`${days}d ${hours}h ${mins}m ${secs}s`);
+            }
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [todayStatus?.activeLeave]);
 
     const fetchTodayStatus = useCallback(async () => {
         try {
             const res = await attendanceAPI.today();
+
+            // Extract the pending LEAVE_END request manually
+            const pendingReqs = res.data.pendingRequests || [];
+            res.data.pendingReturnReq = pendingReqs.find((r: any) => r.type === "LEAVE_END") || null;
+
             setTodayStatus(res.data);
             // Show check-in modal if no attendance & no pending checkin & no active leave/holiday
             const d = res.data as AttendanceToday;
@@ -166,19 +204,12 @@ export default function EmployeeDashboard() {
         setAttError("");
 
         if (!leaveForm.leaveFromDate || !leaveForm.leaveToDate) {
-            setAttError(`Dates missing in state! fromDate="${leaveForm.leaveFromDate}" toDate="${leaveForm.leaveToDate}"`);
+            setAttError("Please select both From and To dates.");
             setAttActionLoading(false);
             return;
         }
 
-        // Validate text input formats
-        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
         const timeRegex = /^\d{2}:\d{2}$/;
-        if (!dateRegex.test(leaveForm.leaveFromDate) || !dateRegex.test(leaveForm.leaveToDate)) {
-            setAttError("Dates must be in YYYY-MM-DD format (Example: 2026-10-15)");
-            setAttActionLoading(false);
-            return;
-        }
         const setFromTime = leaveForm.leaveFromTime || "09:00";
         const setToTime = leaveForm.leaveToTime || "18:00";
         if (!timeRegex.test(setFromTime) || !timeRegex.test(setToTime)) {
@@ -188,12 +219,20 @@ export default function EmployeeDashboard() {
         }
 
         try {
-            // Combine separate date+time fields into ISO strings
-            const leaveFrom = `${leaveForm.leaveFromDate}T${setFromTime}:00`;
-            const leaveTo = `${leaveForm.leaveToDate}T${setToTime}:00`;
+            // Extract YYYY-MM-DD reliably from the Date objects based on local browser timezone
+            const fromYear = leaveForm.leaveFromDate.getFullYear();
+            const fromMonth = String(leaveForm.leaveFromDate.getMonth() + 1).padStart(2, '0');
+            const fromDay = String(leaveForm.leaveFromDate.getDate()).padStart(2, '0');
+
+            const toYear = leaveForm.leaveToDate.getFullYear();
+            const toMonth = String(leaveForm.leaveToDate.getMonth() + 1).padStart(2, '0');
+            const toDay = String(leaveForm.leaveToDate.getDate()).padStart(2, '0');
+
+            const leaveFrom = `${fromYear}-${fromMonth}-${fromDay}T${setFromTime}:00`;
+            const leaveTo = `${toYear}-${toMonth}-${toDay}T${setToTime}:00`;
             await attendanceAPI.applyLeave({ leaveFrom, leaveTo, reason: leaveForm.reason });
             setShowLeaveModal(false);
-            setLeaveForm({ leaveFrom: "", leaveTo: "", reason: "", leaveFromDate: "", leaveFromTime: "09:00", leaveToDate: "", leaveToTime: "18:00" });
+            setLeaveForm({ leaveFromDate: null, leaveToDate: null, leaveFromTime: "09:00", leaveToTime: "18:00", reason: "" });
             await fetchTodayStatus();
             await fetchMyAttendance();
         } catch (e: any) {
@@ -215,10 +254,20 @@ export default function EmployeeDashboard() {
     const handleRequestHoliday = async () => {
         setAttActionLoading(true);
         setAttError("");
+        if (!holidayForm.holidayDate) {
+            setAttError("Please select a precise holiday date");
+            setAttActionLoading(false);
+            return;
+        }
         try {
-            await attendanceAPI.requestHoliday(holidayForm);
+            const y = holidayForm.holidayDate.getFullYear();
+            const m = String(holidayForm.holidayDate.getMonth() + 1).padStart(2, '0');
+            const d = String(holidayForm.holidayDate.getDate()).padStart(2, '0');
+            const dateStr = `${y}-${m}-${d}`;
+
+            await attendanceAPI.requestHoliday({ holidayDate: dateStr, description: holidayForm.description });
             setShowHolidayModal(false);
-            setHolidayForm({ holidayDate: "", description: "" });
+            setHolidayForm({ holidayDate: null, description: "" });
             await fetchMyAttendance();
         } catch (e: any) {
             setAttError(e?.response?.data?.error || "Failed to request holiday");
@@ -356,6 +405,39 @@ export default function EmployeeDashboard() {
                         <button onClick={reset} className="btn-primary w-full">
                             <Plus className="w-4 h-4 inline mr-2" />Create Another Job
                         </button>
+                    </div>
+                </div>
+            </DashboardLayout>
+        );
+    }
+
+    if (todayStatus?.activeLeave) {
+        return (
+            <DashboardLayout title="Employee Dashboard" subtitle={`Welcome, ${user?.name}`}>
+                <div className="flex flex-col items-center justify-center min-h-[60vh] animate-fade-in">
+                    <div className="card max-w-lg w-full text-center space-y-6 p-10 border-purple-500/30 bg-purple-500/5 shadow-2xl shadow-purple-500/10">
+                        <Umbrella className="w-20 h-20 text-purple-400 mx-auto animate-bounce cursor-pointer" />
+                        <h2 className="text-3xl font-bold text-white">You are on Leave</h2>
+                        <div className="bg-black/40 rounded-xl p-8 font-mono text-4xl tracking-widest text-purple-300 border border-purple-500/20">
+                            {timeLeft || "Calculating..."}
+                        </div>
+                        <p className="text-slate-400 text-sm">
+                            Your dashboard is locked until your approved leave time completes or you request an early return.
+                        </p>
+
+                        <div className="pt-8 border-t border-slate-800/50 mt-4">
+                            {todayStatus.pendingReturnReq ? (
+                                <div className="text-amber-400 flex items-center justify-center gap-2 font-medium bg-amber-500/10 p-4 rounded-xl border border-amber-500/20">
+                                    <Clock className="w-5 h-5 animate-spin-slow" />
+                                    Return Request Pending Admin Approval
+                                </div>
+                            ) : (
+                                <button onClick={() => handleConfirmLeaveEnd(todayStatus.activeLeave?.id || "")} disabled={attActionLoading} className="btn-primary w-full py-4 text-lg font-semibold bg-purple-500 hover:bg-purple-600 shadow-xl shadow-purple-500/20">
+                                    {attActionLoading ? "Sending request..." : "I'm Back From Leave"}
+                                </button>
+                            )}
+                            {attError && <p className="text-red-400 text-sm mt-3">{attError}</p>}
+                        </div>
                     </div>
                 </div>
             </DashboardLayout>
@@ -666,11 +748,7 @@ export default function EmployeeDashboard() {
                         {todayStatus?.holiday && (
                             <div className="bg-pink-500/10 border border-pink-500/30 rounded-xl p-3 text-sm text-pink-300 mb-3">Holiday — {todayStatus.holiday.description || todayStatus.holiday.holidayDate}</div>
                         )}
-                        {todayStatus?.activeLeave && (
-                            <div className="bg-purple-500/10 border border-purple-500/30 rounded-xl p-3 text-sm text-purple-300 mb-3">
-                                On Approved Leave until {new Date(todayStatus.activeLeave.leaveTo).toLocaleDateString()}
-                            </div>
-                        )}
+                        {/* activeLeave badge is completely hidden inside the normal dashboard because the entire dashboard is locked out now when on leave! */}
 
                         {/* Attendance record */}
                         <div className="grid grid-cols-2 gap-3 mb-4">
@@ -920,45 +998,53 @@ export default function EmployeeDashboard() {
                             <button onClick={() => { setShowLeaveModal(false); setAttError(""); }}><X className="w-5 h-5 text-slate-500" /></button>
                         </div>
                         <div className="space-y-3 mb-4">
-                            <div>
-                                <label className="block text-xs text-slate-400 mb-1">From Date (YYYY-MM-DD) *</label>
-                                <input
-                                    type="text"
-                                    placeholder="2026-10-15"
-                                    value={leaveForm.leaveFromDate}
-                                    onChange={e => setLeaveForm(f => ({ ...f, leaveFromDate: e.target.value }))}
-                                    className="input-field text-sm"
-                                />
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs text-slate-400 mb-1">From Date *</label>
+                                    <div className="relative">
+                                        <DatePicker
+                                            selected={leaveForm.leaveFromDate}
+                                            onChange={(date: Date | null) => setLeaveForm(f => ({ ...f, leaveFromDate: date }))}
+                                            className="input-field text-sm w-full"
+                                            placeholderText="Select Date…"
+                                            dateFormat="yyyy-MM-dd"
+                                        />
+                                        <Calendar className="absolute right-3 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-slate-400 mb-1">From Time *</label>
+                                    <input
+                                        type="time"
+                                        value={leaveForm.leaveFromTime}
+                                        onChange={e => setLeaveForm(f => ({ ...f, leaveFromTime: e.target.value }))}
+                                        className="input-field text-sm"
+                                    />
+                                </div>
                             </div>
-                            <div>
-                                <label className="block text-xs text-slate-400 mb-1">From Time (HH:MM) *</label>
-                                <input
-                                    type="text"
-                                    placeholder="09:00"
-                                    value={leaveForm.leaveFromTime}
-                                    onChange={e => setLeaveForm(f => ({ ...f, leaveFromTime: e.target.value }))}
-                                    className="input-field text-sm"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-xs text-slate-400 mb-1">To Date (YYYY-MM-DD) *</label>
-                                <input
-                                    type="text"
-                                    placeholder="2026-10-17"
-                                    value={leaveForm.leaveToDate}
-                                    onChange={e => setLeaveForm(f => ({ ...f, leaveToDate: e.target.value }))}
-                                    className="input-field text-sm"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-xs text-slate-400 mb-1">To Time (HH:MM) *</label>
-                                <input
-                                    type="text"
-                                    placeholder="18:00"
-                                    value={leaveForm.leaveToTime}
-                                    onChange={e => setLeaveForm(f => ({ ...f, leaveToTime: e.target.value }))}
-                                    className="input-field text-sm"
-                                />
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs text-slate-400 mb-1">To Date *</label>
+                                    <div className="relative">
+                                        <DatePicker
+                                            selected={leaveForm.leaveToDate}
+                                            onChange={(date: Date | null) => setLeaveForm(f => ({ ...f, leaveToDate: date }))}
+                                            className="input-field text-sm w-full"
+                                            placeholderText="Select Date…"
+                                            dateFormat="yyyy-MM-dd"
+                                        />
+                                        <Calendar className="absolute right-3 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-slate-400 mb-1">To Time *</label>
+                                    <input
+                                        type="time"
+                                        value={leaveForm.leaveToTime}
+                                        onChange={e => setLeaveForm(f => ({ ...f, leaveToTime: e.target.value }))}
+                                        className="input-field text-sm"
+                                    />
+                                </div>
                             </div>
                             <div>
                                 <label className="block text-xs text-slate-400 mb-1">Reason</label>
@@ -988,7 +1074,16 @@ export default function EmployeeDashboard() {
                         <div className="space-y-3 mb-4">
                             <div>
                                 <label className="block text-xs text-slate-400 mb-1">Holiday Date *</label>
-                                <input type="date" value={holidayForm.holidayDate} onChange={e => setHolidayForm(f => ({ ...f, holidayDate: e.target.value }))} className="input-field text-sm" required />
+                                <div className="relative">
+                                    <DatePicker
+                                        selected={holidayForm.holidayDate}
+                                        onChange={(date: Date | null) => setHolidayForm(f => ({ ...f, holidayDate: date }))}
+                                        className="input-field text-sm w-full"
+                                        placeholderText="Select holiday date…"
+                                        dateFormat="yyyy-MM-dd"
+                                    />
+                                    <Calendar className="absolute right-3 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
+                                </div>
                             </div>
                             <div>
                                 <label className="block text-xs text-slate-400 mb-1">Description / Reason</label>

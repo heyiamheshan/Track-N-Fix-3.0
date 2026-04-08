@@ -87,3 +87,36 @@ export const employeesAPI = {
     toggleStatus: (id: string, isActive: boolean) =>
         api.patch(`/employees/${id}/status`, { isActive }),
 };
+
+// Attendance
+export const attendanceAPI = {
+    // Employee
+    today: () => api.get("/attendance/today"),
+    my: () => api.get("/attendance/my"),
+    checkIn: () => api.post("/attendance/checkin"),
+    checkOut: (reason?: string) => api.post("/attendance/checkout", { reason }),
+    overtimeStart: (reason: string) => api.post("/attendance/overtime/start", { reason }),
+    overtimeEnd: (overtimeId: string) => api.post("/attendance/overtime/end", { overtimeId }),
+    applyLeave: (data: { leaveFrom: string; leaveTo: string; reason?: string }) => api.post("/attendance/leave", data),
+    confirmLeaveEnd: (leaveId: string) => api.post("/attendance/leave/confirm-end", { leaveId }),
+    requestHoliday: (data: { holidayDate: string; description?: string }) => api.post("/attendance/holiday", data),
+
+    // Admin
+    adminPending: () => api.get("/attendance/admin/pending"),
+    approveRequest: (id: string) => api.put(`/attendance/admin/request/${id}/approve`),
+    rejectRequest: (id: string, reason?: string) => api.put(`/attendance/admin/request/${id}/reject`, { reason }),
+    approveLeave: (id: string) => api.put(`/attendance/admin/leave/${id}/approve`),
+    rejectLeave: (id: string, reason?: string) => api.put(`/attendance/admin/leave/${id}/reject`, { reason }),
+    approveOvertime: (id: string) => api.put(`/attendance/admin/overtime/${id}/approve`),
+    rejectOvertime: (id: string, reason?: string) => api.put(`/attendance/admin/overtime/${id}/reject`, { reason }),
+    approveHoliday: (id: string) => api.put(`/attendance/admin/holiday/${id}/approve`),
+    rejectHoliday: (id: string) => api.put(`/attendance/admin/holiday/${id}/reject`),
+
+    // Manager
+    overview: (period: "weekly" | "monthly", date?: string) =>
+        api.get(`/attendance/manager/overview?period=${period}${date ? `&date=${date}` : ""}`),
+    history: (params?: { employeeId?: string; startDate?: string; endDate?: string }) =>
+        api.get("/attendance/manager/history", { params }),
+    archive: () => api.post("/attendance/manager/archive"),
+    managerEmployees: () => api.get("/attendance/manager/employees"),
+};

@@ -1,10 +1,10 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import ImageUploader from "@/components/ImageUploader";
-import { jobsAPI, voiceAPI } from "@/lib/api";
+import { jobsAPI, voiceAPI, attendanceAPI } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { Plus, Send, CheckCircle, Wrench, Car, Zap, AlertTriangle, FileText, Clock, ChevronRight, Eye, X } from "lucide-react";
+import { Plus, Send, CheckCircle, Wrench, Car, Zap, AlertTriangle, FileText, Clock, ChevronRight, Eye, X, CalendarClock, LogIn, LogOut, Coffee, Umbrella, Star, AlertCircle, Calendar } from "lucide-react";
 
 type JobType = "SERVICE" | "REPAIR" | "ACCIDENT_RECOVERY";
 type Step = "select_type" | "before_images" | "after_images" | "notes" | "done";
@@ -20,7 +20,23 @@ const JOB_TYPES: { value: JobType; label: string; desc: string; icon: React.Reac
     { value: "ACCIDENT_RECOVERY", label: "Accident Recovery", desc: "Body work and accident damage repair", icon: <AlertTriangle className="w-6 h-6" />, color: "red" },
 ];
 
-type Tab = "create" | "history";
+type Tab = "create" | "history" | "attendance";
+
+interface AttendanceToday {
+    attendance: { id: string; checkInTime: string | null; checkOutTime: string | null; status: string } | null;
+    pendingRequests: { id: string; type: string; requestedTime: string; status: string }[];
+    activeLeave: { id: string; leaveFrom: string; leaveTo: string; reason: string; leaveEndConfirmed: boolean } | null;
+    activeOvertime: { id: string; overtimeStart: string; status: string } | null;
+    holiday: { id: string; holidayDate: string; description: string } | null;
+}
+
+interface MyAttendance {
+    requests: any[];
+    leaves: any[];
+    overtimes: any[];
+    holidays: any[];
+    attendance: any[];
+}
 
 export default function EmployeeDashboard() {
     const { user } = useAuth();
@@ -43,6 +59,182 @@ export default function EmployeeDashboard() {
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
     const [isRecording, setIsRecording] = useState(false);
     const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+
+    // ── Attendance state ──────────────────────────────────────────────────────
+    const [todayStatus, setTodayStatus] = useState<AttendanceToday | null>(null);
+    const [myAttendance, setMyAttendance] = useState<MyAttendance | null>(null);
+    const [attLoading, setAttLoading] = useState(false);
+    const [attActionLoading, setAttActionLoading] = useState(false);
+    const [attError, setAttError] = useState("");
+    const [showCheckInModal, setShowCheckInModal] = useState(false);
+    const [checkoutReason, setCheckoutReason] = useState("");
+    const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+    const [showOvertimeModal, setShowOvertimeModal] = useState(false);
+    const [overtimeReason, setOvertimeReason] = useState("");
+    const [showLeaveModal, setShowLeaveModal] = useState(false);
+    const [leaveForm, setLeaveForm] = useState({ leaveFrom: "", leaveTo: "", reason: "", leaveFromDate: "", leaveFromTime: "09:00", leaveToDate: "", leaveToTime: "18:00" });
+    const [showHolidayModal, setShowHolidayModal] = useState(false);
+    const [holidayForm, setHolidayForm] = useState({ holidayDate: "", description: "" });
+    const [showLeaveEndModal, setShowLeaveEndModal] = useState(false);
+
+    const fetchTodayStatus = useCallback(async () => {
+        try {
+            const res = await attendanceAPI.today();
+            setTodayStatus(res.data);
+            // Show check-in modal if no attendance & no pending checkin & no active leave/holiday
+            const d = res.data as AttendanceToday;
+            const hasPendingCheckin = d.pendingRequests.some((r) => r.type === "CHECKIN");
+            if (!d.attendance && !hasPendingCheckin && !d.activeLeave && !d.holiday) {
+                setShowCheckInModal(true);
+            }
+            // Show leave-end confirmation if leave ended
+            if (d.activeLeave && !d.activeLeave.leaveEndConfirmed) {
+                const leaveEnd = new Date(d.activeLeave.leaveTo);
+                if (new Date() > leaveEnd) setShowLeaveEndModal(true);
+            }
+        } catch { /* not logged in yet */ }
+    }, []);
+
+    const fetchMyAttendance = useCallback(async () => {
+        try {
+            const res = await attendanceAPI.my();
+            setMyAttendance(res.data);
+        } catch { /* ignore */ }
+    }, []);
+
+    useEffect(() => {
+        fetchTodayStatus();
+    }, [fetchTodayStatus]);
+
+    useEffect(() => {
+        if (tab === "attendance") {
+            setAttLoading(true);
+            Promise.all([fetchTodayStatus(), fetchMyAttendance()]).finally(() => setAttLoading(false));
+        }
+    }, [tab, fetchTodayStatus, fetchMyAttendance]);
+
+    const handleCheckIn = async () => {
+        setAttActionLoading(true);
+        setAttError("");
+        try {
+            await attendanceAPI.checkIn();
+            setShowCheckInModal(false);
+            await fetchTodayStatus();
+        } catch (e: any) {
+            setAttError(e?.response?.data?.error || "Failed to send check-in request");
+        } finally { setAttActionLoading(false); }
+    };
+
+    const handleCheckOut = async () => {
+        setAttActionLoading(true);
+        setAttError("");
+        try {
+            await attendanceAPI.checkOut(checkoutReason || undefined);
+            setShowCheckoutModal(false);
+            setCheckoutReason("");
+            await fetchTodayStatus();
+        } catch (e: any) {
+            setAttError(e?.response?.data?.error || "Failed to send checkout request");
+        } finally { setAttActionLoading(false); }
+    };
+
+    const handleOvertimeStart = async () => {
+        setAttActionLoading(true);
+        setAttError("");
+        try {
+            await attendanceAPI.overtimeStart(overtimeReason);
+            setShowOvertimeModal(false);
+            setOvertimeReason("");
+            await fetchTodayStatus();
+        } catch (e: any) {
+            setAttError(e?.response?.data?.error || "Failed to request overtime");
+        } finally { setAttActionLoading(false); }
+    };
+
+    const handleOvertimeEnd = async (overtimeId: string) => {
+        setAttActionLoading(true);
+        try {
+            await attendanceAPI.overtimeEnd(overtimeId);
+            await fetchTodayStatus();
+        } catch (e: any) {
+            setAttError(e?.response?.data?.error || "Failed to confirm overtime end");
+        } finally { setAttActionLoading(false); }
+    };
+
+    const handleApplyLeave = async () => {
+        setAttActionLoading(true);
+        setAttError("");
+
+        if (!leaveForm.leaveFromDate || !leaveForm.leaveToDate) {
+            setAttError(`Dates missing in state! fromDate="${leaveForm.leaveFromDate}" toDate="${leaveForm.leaveToDate}"`);
+            setAttActionLoading(false);
+            return;
+        }
+
+        // Validate text input formats
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        const timeRegex = /^\d{2}:\d{2}$/;
+        if (!dateRegex.test(leaveForm.leaveFromDate) || !dateRegex.test(leaveForm.leaveToDate)) {
+            setAttError("Dates must be in YYYY-MM-DD format (Example: 2026-10-15)");
+            setAttActionLoading(false);
+            return;
+        }
+        const setFromTime = leaveForm.leaveFromTime || "09:00";
+        const setToTime = leaveForm.leaveToTime || "18:00";
+        if (!timeRegex.test(setFromTime) || !timeRegex.test(setToTime)) {
+            setAttError("Times must be in HH:MM format in 24-hour time (Example: 09:00 or 14:30)");
+            setAttActionLoading(false);
+            return;
+        }
+
+        try {
+            // Combine separate date+time fields into ISO strings
+            const leaveFrom = `${leaveForm.leaveFromDate}T${setFromTime}:00`;
+            const leaveTo = `${leaveForm.leaveToDate}T${setToTime}:00`;
+            await attendanceAPI.applyLeave({ leaveFrom, leaveTo, reason: leaveForm.reason });
+            setShowLeaveModal(false);
+            setLeaveForm({ leaveFrom: "", leaveTo: "", reason: "", leaveFromDate: "", leaveFromTime: "09:00", leaveToDate: "", leaveToTime: "18:00" });
+            await fetchTodayStatus();
+            await fetchMyAttendance();
+        } catch (e: any) {
+            setAttError(e?.response?.data?.error || "Failed to apply for leave");
+        } finally { setAttActionLoading(false); }
+    };
+
+    const handleConfirmLeaveEnd = async (leaveId: string) => {
+        setAttActionLoading(true);
+        try {
+            await attendanceAPI.confirmLeaveEnd(leaveId);
+            setShowLeaveEndModal(false);
+            await fetchTodayStatus();
+        } catch (e: any) {
+            setAttError(e?.response?.data?.error || "Failed to confirm leave end");
+        } finally { setAttActionLoading(false); }
+    };
+
+    const handleRequestHoliday = async () => {
+        setAttActionLoading(true);
+        setAttError("");
+        try {
+            await attendanceAPI.requestHoliday(holidayForm);
+            setShowHolidayModal(false);
+            setHolidayForm({ holidayDate: "", description: "" });
+            await fetchMyAttendance();
+        } catch (e: any) {
+            setAttError(e?.response?.data?.error || "Failed to request holiday");
+        } finally { setAttActionLoading(false); }
+    };
+
+    const statusColor = (status: string) => {
+        switch (status) {
+            case "PRESENT": return "text-emerald-400";
+            case "EARLY_CHECKOUT": return "text-amber-400";
+            case "OVERTIME": return "text-blue-400";
+            case "ON_LEAVE": return "text-purple-400";
+            case "HOLIDAY": return "text-pink-400";
+            default: return "text-slate-400";
+        }
+    };
 
     useEffect(() => {
         if (tab === "history") {
@@ -176,10 +368,11 @@ export default function EmployeeDashboard() {
             subtitle={`Welcome, ${user?.name}. Create and review your vehicle jobs below.`}
             actions={<button onClick={() => { setTab("create"); reset(); }} className="btn-secondary text-sm"><Plus className="w-4 h-4 inline mr-1" />New Job</button>}
         >
-            <div className="flex gap-2 mb-6 max-w-2xl mx-auto">
+            <div className="flex gap-2 mb-6 max-w-2xl mx-auto flex-wrap">
                 {([
                     { key: "create", label: "Create Job", icon: <Plus className="w-3.5 h-3.5" /> },
                     { key: "history", label: "My Submitted Jobs", icon: <FileText className="w-3.5 h-3.5" /> },
+                    { key: "attendance", label: "Attendance", icon: <CalendarClock className="w-3.5 h-3.5" /> },
                 ] as const).map(t => (
                     <button key={t.key} onClick={() => setTab(t.key as Tab)} className={`tab-btn flex items-center gap-1.5 ${tab === t.key ? "active" : ""}`}>
                         {t.icon}{t.label}
@@ -454,6 +647,382 @@ export default function EmployeeDashboard() {
                             </div>
                         </div>
                     )}
+                </div>
+            )}
+
+            {/* ── ATTENDANCE TAB ── */}
+            {tab === "attendance" && (
+                <div className="max-w-2xl mx-auto animate-fade-in space-y-4">
+                    {attLoading && <div className="text-center py-10 text-slate-500">Loading attendance…</div>}
+                    {attError && <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-400 text-sm">{attError}</div>}
+
+                    {/* Today's Status Card */}
+                    <div className="card border-blue-500/20">
+                        <div className="flex items-center justify-between mb-3">
+                            <h3 className="font-semibold text-blue-300 flex items-center gap-2"><CalendarClock className="w-4 h-4" />Today's Attendance</h3>
+                            <span className="text-xs text-slate-500">{new Date().toLocaleDateString("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</span>
+                        </div>
+
+                        {todayStatus?.holiday && (
+                            <div className="bg-pink-500/10 border border-pink-500/30 rounded-xl p-3 text-sm text-pink-300 mb-3">Holiday — {todayStatus.holiday.description || todayStatus.holiday.holidayDate}</div>
+                        )}
+                        {todayStatus?.activeLeave && (
+                            <div className="bg-purple-500/10 border border-purple-500/30 rounded-xl p-3 text-sm text-purple-300 mb-3">
+                                On Approved Leave until {new Date(todayStatus.activeLeave.leaveTo).toLocaleDateString()}
+                            </div>
+                        )}
+
+                        {/* Attendance record */}
+                        <div className="grid grid-cols-2 gap-3 mb-4">
+                            <div className="bg-white/5 rounded-xl p-3">
+                                <p className="text-xs text-slate-500 mb-1">Check-in</p>
+                                <p className={`font-semibold ${todayStatus?.attendance?.checkInTime ? "text-emerald-400" : "text-slate-500"}`}>
+                                    {todayStatus?.attendance?.checkInTime ? new Date(todayStatus.attendance.checkInTime).toLocaleTimeString() : "—"}
+                                </p>
+                            </div>
+                            <div className="bg-white/5 rounded-xl p-3">
+                                <p className="text-xs text-slate-500 mb-1">Check-out</p>
+                                <p className={`font-semibold ${todayStatus?.attendance?.checkOutTime ? "text-amber-400" : "text-slate-500"}`}>
+                                    {todayStatus?.attendance?.checkOutTime ? new Date(todayStatus.attendance.checkOutTime).toLocaleTimeString() : "—"}
+                                </p>
+                            </div>
+                        </div>
+
+                        {todayStatus?.attendance?.status && (
+                            <div className="mb-3">
+                                <span className={`text-sm font-medium ${statusColor(todayStatus.attendance.status)}`}>Status: {todayStatus.attendance.status.replace("_", " ")}</span>
+                            </div>
+                        )}
+
+                        {/* Pending requests */}
+                        {(todayStatus?.pendingRequests?.length ?? 0) > 0 && (
+                            <div className="space-y-1 mb-3">
+                                {todayStatus!.pendingRequests.map(r => (
+                                    <div key={r.id} className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 text-xs text-amber-300">
+                                        {r.type.replace(/_/g, " ")} — Pending admin approval
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Action buttons */}
+                        <div className="flex flex-wrap gap-2 mt-2">
+                            {/* Check-in button */}
+                            {!todayStatus?.attendance && !todayStatus?.pendingRequests.some(r => r.type === "CHECKIN") && !todayStatus?.activeLeave && !todayStatus?.holiday && (
+                                <button onClick={() => setShowCheckInModal(true)} className="btn-primary text-sm flex items-center gap-1.5">
+                                    <LogIn className="w-4 h-4" />Check In
+                                </button>
+                            )}
+                            {/* Check-out button */}
+                            {todayStatus?.attendance?.checkInTime && !todayStatus.attendance.checkOutTime &&
+                                !todayStatus.pendingRequests.some(r => r.type === "CHECKOUT" || r.type === "EARLY_CHECKOUT") && (
+                                    <button onClick={() => setShowCheckoutModal(true)} className="btn-secondary text-sm flex items-center gap-1.5">
+                                        <LogOut className="w-4 h-4" />Check Out
+                                    </button>
+                                )}
+                            {/* Overtime button */}
+                            {todayStatus?.attendance?.checkInTime && !todayStatus.activeOvertime &&
+                                !todayStatus.pendingRequests.some(r => r.type === "OVERTIME_START") && (
+                                    <button onClick={() => setShowOvertimeModal(true)} className="bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-blue-300 text-sm px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors">
+                                        <Star className="w-4 h-4" />Request Overtime
+                                    </button>
+                                )}
+                            {/* End overtime */}
+                            {todayStatus?.activeOvertime && (
+                                <button onClick={() => handleOvertimeEnd(todayStatus.activeOvertime!.id)} disabled={attActionLoading} className="bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-blue-300 text-sm px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors">
+                                    <CheckCircle className="w-4 h-4" />Confirm Overtime Complete
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Quick Actions */}
+                    <div className="grid grid-cols-2 gap-3">
+                        <button onClick={() => setShowLeaveModal(true)} className="card flex items-center gap-3 hover:bg-white/5 transition-colors text-left">
+                            <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center flex-shrink-0">
+                                <Umbrella className="w-5 h-5 text-purple-400" />
+                            </div>
+                            <div>
+                                <p className="font-medium text-sm text-white">Apply for Leave</p>
+                                <p className="text-xs text-slate-500">Submit leave request</p>
+                            </div>
+                        </button>
+                        <button onClick={() => setShowHolidayModal(true)} className="card flex items-center gap-3 hover:bg-white/5 transition-colors text-left">
+                            <div className="w-10 h-10 rounded-xl bg-pink-500/20 flex items-center justify-center flex-shrink-0">
+                                <Calendar className="w-5 h-5 text-pink-400" />
+                            </div>
+                            <div>
+                                <p className="font-medium text-sm text-white">Request Holiday</p>
+                                <p className="text-xs text-slate-500">Apply for a day off</p>
+                            </div>
+                        </button>
+                    </div>
+
+                    {/* My Records */}
+                    {myAttendance && (
+                        <div className="space-y-4">
+                            {/* Recent attendance */}
+                            <div className="card">
+                                <h4 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2"><Clock className="w-4 h-4" />Recent Attendance</h4>
+                                {myAttendance.attendance.length === 0 ? (
+                                    <p className="text-sm text-slate-500">No attendance records yet.</p>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {myAttendance.attendance.slice(0, 7).map((a: any) => (
+                                            <div key={a.id} className="flex items-center justify-between text-sm border-b border-white/5 pb-2">
+                                                <span className="text-slate-300">{new Date(a.date).toLocaleDateString("en-GB")}</span>
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-slate-500 text-xs">{a.checkInTime ? new Date(a.checkInTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"} → {a.checkOutTime ? new Date(a.checkOutTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</span>
+                                                    <span className={`text-xs font-medium ${statusColor(a.status)}`}>{a.status.replace("_", " ")}</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Leave history */}
+                            {myAttendance.leaves.length > 0 && (
+                                <div className="card">
+                                    <h4 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2"><Umbrella className="w-4 h-4" />Leave Requests</h4>
+                                    <div className="space-y-2">
+                                        {myAttendance.leaves.map((l: any) => (
+                                            <div key={l.id} className="flex items-center justify-between text-sm border-b border-white/5 pb-2">
+                                                <div>
+                                                    <span className="text-slate-300">{new Date(l.leaveFrom).toLocaleDateString()} – {new Date(l.leaveTo).toLocaleDateString()}</span>
+                                                    {l.reason && <p className="text-xs text-slate-500">{l.reason}</p>}
+                                                </div>
+                                                <span className={`text-xs font-medium px-2 py-0.5 rounded ${l.status === "APPROVED" ? "bg-emerald-500/20 text-emerald-300" : l.status === "REJECTED" ? "bg-red-500/20 text-red-300" : "bg-amber-500/20 text-amber-300"}`}>{l.status}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Overtime history */}
+                            {myAttendance.overtimes.length > 0 && (
+                                <div className="card">
+                                    <h4 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2"><Coffee className="w-4 h-4" />Overtime Requests</h4>
+                                    <div className="space-y-2">
+                                        {myAttendance.overtimes.map((o: any) => (
+                                            <div key={o.id} className="flex items-center justify-between text-sm border-b border-white/5 pb-2">
+                                                <div>
+                                                    <span className="text-slate-300">{new Date(o.overtimeStart).toLocaleDateString()}</span>
+                                                    {o.reason && <p className="text-xs text-slate-500">{o.reason}</p>}
+                                                </div>
+                                                <span className={`text-xs font-medium px-2 py-0.5 rounded ${o.status === "APPROVED" ? "bg-blue-500/20 text-blue-300" : o.status === "COMPLETED" ? "bg-emerald-500/20 text-emerald-300" : o.status === "REJECTED" ? "bg-red-500/20 text-red-300" : "bg-amber-500/20 text-amber-300"}`}>{o.status}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Holiday history */}
+                            {myAttendance.holidays.length > 0 && (
+                                <div className="card">
+                                    <h4 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2"><Calendar className="w-4 h-4" />Holiday Requests</h4>
+                                    <div className="space-y-2">
+                                        {myAttendance.holidays.map((h: any) => (
+                                            <div key={h.id} className="flex items-center justify-between text-sm border-b border-white/5 pb-2">
+                                                <div>
+                                                    <span className="text-slate-300">{new Date(h.holidayDate).toLocaleDateString()}</span>
+                                                    {h.description && <p className="text-xs text-slate-500">{h.description}</p>}
+                                                </div>
+                                                <span className={`text-xs font-medium px-2 py-0.5 rounded ${h.status === "APPROVED" ? "bg-emerald-500/20 text-emerald-300" : h.status === "REJECTED" ? "bg-red-500/20 text-red-300" : "bg-amber-500/20 text-amber-300"}`}>{h.status}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ── CHECK-IN MODAL (auto-popup on first login of day) ── */}
+            {showCheckInModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+                    <div className="card max-w-sm w-full animate-fade-in text-center">
+                        <div className="w-16 h-16 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center mx-auto mb-4">
+                            <LogIn className="w-8 h-8 text-emerald-400" />
+                        </div>
+                        <h3 className="text-lg font-bold text-white mb-1">Mark Your Attendance</h3>
+                        <p className="text-slate-400 text-sm mb-1">{new Date().toLocaleDateString("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</p>
+                        <p className="text-slate-500 text-xs mb-6">{new Date().toLocaleTimeString()}</p>
+                        {attError && <p className="text-red-400 text-sm mb-3">{attError}</p>}
+                        <div className="flex gap-3">
+                            <button onClick={() => setShowCheckInModal(false)} className="btn-secondary flex-1">Later</button>
+                            <button onClick={handleCheckIn} disabled={attActionLoading} className="btn-primary flex-1">
+                                <LogIn className="w-4 h-4 inline mr-1" />
+                                {attActionLoading ? "Sending…" : "Check In"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── CHECK-OUT MODAL ── */}
+            {showCheckoutModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+                    <div className="card max-w-sm w-full animate-fade-in">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="font-semibold flex items-center gap-2"><LogOut className="w-4 h-4 text-amber-400" />Check Out</h3>
+                            <button onClick={() => setShowCheckoutModal(false)}><X className="w-5 h-5 text-slate-500" /></button>
+                        </div>
+                        <p className="text-sm text-slate-400 mb-3">Current time: <span className="text-white font-medium">{new Date().toLocaleTimeString()}</span></p>
+                        {new Date().getHours() < 17 && (
+                            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-amber-300 text-sm mb-3">
+                                <AlertCircle className="w-4 h-4 inline mr-1" />This will be recorded as an early checkout.
+                            </div>
+                        )}
+                        <div className="mb-4">
+                            <label className="block text-xs text-slate-400 mb-1">Reason (required for early checkout)</label>
+                            <input value={checkoutReason} onChange={e => setCheckoutReason(e.target.value)} placeholder="Reason for early checkout…" className="input-field text-sm" />
+                        </div>
+                        {attError && <p className="text-red-400 text-sm mb-3">{attError}</p>}
+                        <div className="flex gap-3">
+                            <button onClick={() => setShowCheckoutModal(false)} className="btn-secondary flex-1">Cancel</button>
+                            <button onClick={handleCheckOut} disabled={attActionLoading} className="btn-primary flex-1">
+                                {attActionLoading ? "Sending…" : "Confirm Checkout"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── OVERTIME MODAL ── */}
+            {showOvertimeModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+                    <div className="card max-w-sm w-full animate-fade-in">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="font-semibold flex items-center gap-2"><Star className="w-4 h-4 text-blue-400" />Request Overtime</h3>
+                            <button onClick={() => setShowOvertimeModal(false)}><X className="w-5 h-5 text-slate-500" /></button>
+                        </div>
+                        <p className="text-sm text-slate-400 mb-4">Describe what work you will be doing during overtime.</p>
+                        <textarea value={overtimeReason} onChange={e => setOvertimeReason(e.target.value)} rows={3} placeholder="e.g. Completing engine rebuild for Job #42" className="input-field text-sm resize-none mb-4" />
+                        {attError && <p className="text-red-400 text-sm mb-3">{attError}</p>}
+                        <div className="flex gap-3">
+                            <button onClick={() => setShowOvertimeModal(false)} className="btn-secondary flex-1">Cancel</button>
+                            <button onClick={handleOvertimeStart} disabled={attActionLoading || !overtimeReason.trim()} className="btn-primary flex-1">
+                                {attActionLoading ? "Sending…" : "Request Overtime"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── LEAVE MODAL ── */}
+            {showLeaveModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+                    <div className="card max-w-sm w-full animate-fade-in">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="font-semibold flex items-center gap-2"><Umbrella className="w-4 h-4 text-purple-400" />Apply for Leave</h3>
+                            <button onClick={() => { setShowLeaveModal(false); setAttError(""); }}><X className="w-5 h-5 text-slate-500" /></button>
+                        </div>
+                        <div className="space-y-3 mb-4">
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">From Date (YYYY-MM-DD) *</label>
+                                <input
+                                    type="text"
+                                    placeholder="2026-10-15"
+                                    value={leaveForm.leaveFromDate}
+                                    onChange={e => setLeaveForm(f => ({ ...f, leaveFromDate: e.target.value }))}
+                                    className="input-field text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">From Time (HH:MM) *</label>
+                                <input
+                                    type="text"
+                                    placeholder="09:00"
+                                    value={leaveForm.leaveFromTime}
+                                    onChange={e => setLeaveForm(f => ({ ...f, leaveFromTime: e.target.value }))}
+                                    className="input-field text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">To Date (YYYY-MM-DD) *</label>
+                                <input
+                                    type="text"
+                                    placeholder="2026-10-17"
+                                    value={leaveForm.leaveToDate}
+                                    onChange={e => setLeaveForm(f => ({ ...f, leaveToDate: e.target.value }))}
+                                    className="input-field text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">To Time (HH:MM) *</label>
+                                <input
+                                    type="text"
+                                    placeholder="18:00"
+                                    value={leaveForm.leaveToTime}
+                                    onChange={e => setLeaveForm(f => ({ ...f, leaveToTime: e.target.value }))}
+                                    className="input-field text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">Reason</label>
+                                <textarea value={leaveForm.reason} onChange={e => setLeaveForm(f => ({ ...f, reason: e.target.value }))} rows={2} placeholder="Reason for leave…" className="input-field text-sm resize-none" />
+                            </div>
+                        </div>
+                        {attError && <p className="text-red-400 text-sm mb-3">{attError}</p>}
+                        <div className="flex gap-3">
+                            <button onClick={() => { setShowLeaveModal(false); setAttError(""); }} className="btn-secondary flex-1">Cancel</button>
+                            <button onClick={handleApplyLeave} disabled={attActionLoading} className="btn-primary flex-1">
+                                {attActionLoading ? "Sending…" : "Submit Leave Request"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+
+            {/* ── HOLIDAY MODAL ── */}
+            {showHolidayModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+                    <div className="card max-w-sm w-full animate-fade-in">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="font-semibold flex items-center gap-2"><Calendar className="w-4 h-4 text-pink-400" />Request Holiday</h3>
+                            <button onClick={() => setShowHolidayModal(false)}><X className="w-5 h-5 text-slate-500" /></button>
+                        </div>
+                        <div className="space-y-3 mb-4">
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">Holiday Date *</label>
+                                <input type="date" value={holidayForm.holidayDate} onChange={e => setHolidayForm(f => ({ ...f, holidayDate: e.target.value }))} className="input-field text-sm" required />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">Description / Reason</label>
+                                <textarea value={holidayForm.description} onChange={e => setHolidayForm(f => ({ ...f, description: e.target.value }))} rows={3} placeholder="Reason for holiday request…" className="input-field text-sm resize-none" />
+                            </div>
+                        </div>
+                        {attError && <p className="text-red-400 text-sm mb-3">{attError}</p>}
+                        <div className="flex gap-3">
+                            <button onClick={() => setShowHolidayModal(false)} className="btn-secondary flex-1">Cancel</button>
+                            <button onClick={handleRequestHoliday} disabled={attActionLoading || !holidayForm.holidayDate} className="btn-primary flex-1">
+                                {attActionLoading ? "Sending…" : "Submit Holiday Request"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── LEAVE END CONFIRMATION MODAL ── */}
+            {showLeaveEndModal && todayStatus?.activeLeave && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+                    <div className="card max-w-sm w-full animate-fade-in text-center">
+                        <div className="w-16 h-16 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center mx-auto mb-4">
+                            <CheckCircle className="w-8 h-8 text-emerald-400" />
+                        </div>
+                        <h3 className="text-lg font-bold text-white mb-2">Your Leave Has Ended</h3>
+                        <p className="text-slate-400 text-sm mb-6">Please confirm that you are back and available to work.</p>
+                        {attError && <p className="text-red-400 text-sm mb-3">{attError}</p>}
+                        <div className="flex gap-3">
+                            <button onClick={() => setShowLeaveEndModal(false)} className="btn-secondary flex-1">Later</button>
+                            <button onClick={() => handleConfirmLeaveEnd(todayStatus.activeLeave!.id)} disabled={attActionLoading} className="btn-primary flex-1">
+                                {attActionLoading ? "Confirming…" : "I'm Back — Confirm"}
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
 

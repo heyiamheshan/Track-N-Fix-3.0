@@ -1,13 +1,13 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
-import { quotationsAPI, notificationsAPI, employeesAPI } from "@/lib/api";
+import { quotationsAPI, notificationsAPI, employeesAPI, attendanceAPI } from "@/lib/api";
 import { formatDate, JOB_TYPE_LABELS } from "@/lib/utils";
-import { Edit3, Download, Bell, Search, X, Plus, CheckCircle, FileText, DollarSign, Users } from "lucide-react";
+import { Edit3, Download, Bell, Search, X, Plus, CheckCircle, FileText, DollarSign, Users, CalendarClock, AlertTriangle, Archive, Clock, TrendingUp, History } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-type Tab = "quotations" | "search" | "employees";
+type Tab = "quotations" | "search" | "employees" | "attendance";
 
 interface QuotationItem {
     id?: string; description: string; partReplaced?: string; price: number; laborCost: number;
@@ -39,11 +39,132 @@ export default function ManagerDashboard() {
     const [employees, setEmployees] = useState<any[]>([]);
     const [empLoading, setEmpLoading] = useState(false);
 
+    // Attendance
+    const [attPeriod, setAttPeriod] = useState<"weekly" | "monthly">("weekly");
+    const [attDate, setAttDate] = useState("");
+    const [attOverview, setAttOverview] = useState<{ period: string; startDate: string; endDate: string; overview: any[] } | null>(null);
+    const [attLoading, setAttLoading] = useState(false);
+    const [attHistory, setAttHistory] = useState<any[]>([]);
+    const [histLoading, setHistLoading] = useState(false);
+    const [histEmpFilter, setHistEmpFilter] = useState("");
+    const [histStart, setHistStart] = useState("");
+    const [histEnd, setHistEnd] = useState("");
+    const [attArchiving, setAttArchiving] = useState(false);
+    const [attEmpList, setAttEmpList] = useState<any[]>([]);
+
     // Search
     const [searchQ, setSearchQ] = useState("");
     const [searchType, setSearchType] = useState<"vehicleNumber" | "telephone">("vehicleNumber");
     const [searchResult, setSearchResult] = useState<{ vehicle: Record<string, string | undefined>; jobs: Job[] } | null>(null);
     const [searchError, setSearchError] = useState("");
+
+    const fetchOverview = useCallback(async (period: "weekly" | "monthly", date: string) => {
+        setAttLoading(true);
+        try {
+            const res = await attendanceAPI.overview(period, date || undefined);
+            setAttOverview(res.data);
+        } catch { /* silent */ }
+        finally { setAttLoading(false); }
+    }, []);
+
+    const fetchHistory = useCallback(async () => {
+        setHistLoading(true);
+        try {
+            const res = await attendanceAPI.history({
+                employeeId: histEmpFilter || undefined,
+                startDate: histStart || undefined,
+                endDate: histEnd || undefined,
+            });
+            setAttHistory(Array.isArray(res.data) ? res.data : []);
+        } catch { /* silent */ }
+        finally { setHistLoading(false); }
+    }, [histEmpFilter, histStart, histEnd]);
+
+    const handleArchive = async () => {
+        if (!confirm("Archive all current attendance records? This moves them to history and clears the active tables.")) return;
+        setAttArchiving(true);
+        try {
+            const res = await attendanceAPI.archive();
+            alert(`Archived ${res.data.archived ?? 0} records successfully.`);
+            fetchOverview(attPeriod, attDate);
+            attendanceAPI.managerEmployees().then(r => setAttEmpList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+        } catch { alert("Archive failed. Please try again."); }
+        finally { setAttArchiving(false); }
+    };
+
+    const statusBadgeClass = (status: string) => {
+        if (!status) return "bg-slate-600/20 text-slate-400";
+        const s = status.toLowerCase();
+        if (s.includes("checked in") || s === "overtime" || s === "present") return "bg-emerald-500/20 text-emerald-300";
+        if (s === "on leave") return "bg-amber-500/20 text-amber-300";
+        if (s === "on holiday" || s === "holiday") return "bg-purple-500/20 text-purple-300";
+        if (s === "checked out") return "bg-slate-500/20 text-slate-300";
+        if (s === "inactive") return "bg-red-500/20 text-red-300";
+        if (s === "early_checkout" || s === "early checkout") return "bg-orange-500/20 text-orange-300";
+        if (s === "absent" || s === "not checked in") return "bg-red-500/10 text-red-400";
+        return "bg-slate-600/20 text-slate-400";
+    };
+
+    const downloadAttPDF = () => {
+        if (!attOverview) return;
+        const doc = new jsPDF({ orientation: "landscape" });
+        doc.setFillColor(15, 23, 42);
+        doc.rect(0, 0, 300, 36, "F");
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(18);
+        doc.setFont("helvetica", "bold");
+        doc.text("ATTENDANCE OVERVIEW REPORT", 14, 18);
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "normal");
+        const sd = new Date(attOverview.startDate).toLocaleDateString("en-GB");
+        const ed = new Date(attOverview.endDate).toLocaleDateString("en-GB");
+        doc.text(`Period: ${attOverview.period.toUpperCase()} · ${sd} — ${ed}`, 14, 28);
+        doc.text(`Generated: ${new Date().toLocaleDateString("en-GB")}`, 230, 28);
+
+        autoTable(doc, {
+            startY: 44,
+            head: [["Employee", "Days Present", "Leave Days", "Overtime (hrs)", "Early Checkouts", "Holidays", "Status", "Conflict"]],
+            body: attOverview.overview.map(r => [
+                r.employee.name,
+                r.daysPresent,
+                r.leaveDays,
+                r.overtimeHours.toFixed(1),
+                r.earlyCheckouts,
+                r.holidayDays,
+                r.currentStatus,
+                r.conflict ? "⚠ YES" : "—",
+            ]),
+            styles: { fontSize: 8, cellPadding: 3 },
+            headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: "bold" },
+            alternateRowStyles: { fillColor: [248, 250, 252] },
+            didParseCell: (data) => {
+                if (data.section === "body" && data.column.index === 7 && data.cell.raw === "⚠ YES") {
+                    data.cell.styles.textColor = [220, 38, 38];
+                    data.cell.styles.fontStyle = "bold";
+                }
+            },
+        });
+
+        const period = attOverview.period;
+        const label = period === "monthly" ? `Monthly_${sd.replace(/\//g, "-")}` : `Weekly_${sd.replace(/\//g, "-")}`;
+        doc.save(`Attendance_${label}.pdf`);
+    };
+
+    const downloadAttCSV = () => {
+        if (!attOverview) return;
+        const headers = ["Employee", "Email", "Days Present", "Leave Days", "Overtime (hrs)", "Early Checkouts", "Holidays", "Current Status", "Conflict"];
+        const rows = attOverview.overview.map(r => [
+            r.employee.name, r.employee.email, r.daysPresent, r.leaveDays,
+            r.overtimeHours.toFixed(1), r.earlyCheckouts, r.holidayDays,
+            r.currentStatus, r.conflict ? "YES" : "NO",
+        ]);
+        const csv = [headers, ...rows].map(row => row.map((v: unknown) => `"${v}"`).join(",")).join("\n");
+        const blob = new Blob([csv], { type: "text/csv" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = `Attendance_${attOverview.period}.csv`; a.click();
+        URL.revokeObjectURL(url);
+    };
 
     const fetchData = useCallback(async () => {
         setLoading(true);
@@ -64,6 +185,13 @@ export default function ManagerDashboard() {
             employeesAPI.list().then(r => setEmployees(r.data)).finally(() => setEmpLoading(false));
         }
     }, [tab]);
+
+    useEffect(() => {
+        if (tab === "attendance") {
+            fetchOverview(attPeriod, attDate);
+            attendanceAPI.managerEmployees().then(r => setAttEmpList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+        }
+    }, [tab, attPeriod, attDate, fetchOverview]);
 
     const openEdit = (q: Quotation) => {
         setEditQ(q);
@@ -249,6 +377,7 @@ export default function ManagerDashboard() {
                     { key: "quotations", label: "Requested Quotations", icon: <FileText className="w-3.5 h-3.5" />, count: quotations.length as number | undefined },
                     { key: "search", label: "Search Records", icon: <Search className="w-3.5 h-3.5" />, count: undefined as number | undefined },
                     { key: "employees", label: "Employees", icon: <Users className="w-3.5 h-3.5" />, count: undefined as number | undefined },
+                    { key: "attendance", label: "Attendance", icon: <CalendarClock className="w-3.5 h-3.5" />, count: undefined as number | undefined },
                 ] as const).map(t => (
                     <button key={t.key} onClick={() => setTab(t.key as Tab)} className={`tab-btn flex items-center gap-1.5 ${tab === t.key ? "active" : ""}`}>
                         {t.icon}{t.label}
@@ -398,6 +527,227 @@ export default function ManagerDashboard() {
                             ))}
                         </div>
                     )}
+                </div>
+            )}
+
+            {/* ── ATTENDANCE ── */}
+            {tab === "attendance" && (
+                <div className="space-y-6 animate-fade-in">
+
+                    {/* Controls row */}
+                    <div className="card flex flex-wrap items-end gap-4">
+                        <div>
+                            <p className="text-xs text-slate-500 mb-1">Period</p>
+                            <div className="flex gap-2">
+                                <button onClick={() => setAttPeriod("weekly")} className={`tab-btn text-xs ${attPeriod === "weekly" ? "active" : ""}`}>Weekly</button>
+                                <button onClick={() => setAttPeriod("monthly")} className={`tab-btn text-xs ${attPeriod === "monthly" ? "active" : ""}`}>Monthly</button>
+                            </div>
+                        </div>
+                        <div>
+                            <p className="text-xs text-slate-500 mb-1">Reference date</p>
+                            <input type="date" value={attDate} onChange={e => setAttDate(e.target.value)} className="input-field text-xs" />
+                        </div>
+                        <div className="ml-auto flex gap-2 flex-wrap">
+                            <button onClick={downloadAttPDF} disabled={!attOverview} className="btn-secondary text-xs flex items-center gap-1.5">
+                                <Download className="w-3.5 h-3.5" />PDF
+                            </button>
+                            <button onClick={downloadAttCSV} disabled={!attOverview} className="btn-secondary text-xs flex items-center gap-1.5">
+                                <Download className="w-3.5 h-3.5" />Excel (CSV)
+                            </button>
+                            <button onClick={handleArchive} disabled={attArchiving} className="btn-danger text-xs flex items-center gap-1.5">
+                                <Archive className="w-3.5 h-3.5" />{attArchiving ? "Archiving…" : "Archive & Reset"}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Today's Live Snapshot */}
+                    {attEmpList.length > 0 && (
+                        <div>
+                            <p className="text-xs font-semibold text-slate-400 mb-2 flex items-center gap-1.5">
+                                <TrendingUp className="w-3.5 h-3.5" />Today's Snapshot — {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" })}
+                            </p>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                                {attEmpList.map((emp: any) => (
+                                    <div key={emp.id} className="card py-2 px-3 flex items-center gap-2">
+                                        <div className="w-7 h-7 rounded-full bg-blue-600/20 border border-blue-500/30 flex items-center justify-center flex-shrink-0">
+                                            <span className="text-blue-400 font-bold text-xs">{emp.name[0]}</span>
+                                        </div>
+                                        <div className="min-w-0">
+                                            <p className="text-xs font-medium text-white truncate">{emp.name}</p>
+                                            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${statusBadgeClass(emp.todayStatus)}`}>
+                                                {emp.todayStatus}
+                                            </span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Period label */}
+                    {attOverview && (
+                        <p className="text-xs text-slate-500">
+                            <Clock className="w-3 h-3 inline mr-1" />
+                            {new Date(attOverview.startDate).toLocaleDateString("en-GB")} — {new Date(attOverview.endDate).toLocaleDateString("en-GB")}
+                        </p>
+                    )}
+
+                    {/* Conflict alert */}
+                    {attOverview?.overview.some(r => r.conflict) && (
+                        <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 flex items-center gap-2 text-red-400 text-sm">
+                            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                            <span>
+                                <strong>Conflict detected:</strong> {attOverview.overview.filter(r => r.conflict).map((r: any) => r.employee.name).join(", ")} — early checkout recorded during an approved leave period.
+                            </span>
+                        </div>
+                    )}
+
+                    {/* Overview table */}
+                    {attLoading && <div className="text-center py-10 text-slate-500">Loading attendance data…</div>}
+                    {!attLoading && attOverview && (
+                        <div className="card overflow-x-auto p-0">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="border-b border-slate-700/50 text-xs text-slate-400">
+                                        <th className="text-left px-4 py-3">Employee</th>
+                                        <th className="text-center px-3 py-3">Present</th>
+                                        <th className="text-center px-3 py-3">Leave</th>
+                                        <th className="text-center px-3 py-3">OT (hrs)</th>
+                                        <th className="text-center px-3 py-3">Early Out</th>
+                                        <th className="text-center px-3 py-3">Holiday</th>
+                                        <th className="text-center px-3 py-3">Status</th>
+                                        <th className="text-center px-3 py-3">Conflict</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {attOverview.overview.map((row: any) => (
+                                        <tr key={row.employee.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                                            <td className="px-4 py-3">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-7 h-7 rounded-full bg-blue-600/20 border border-blue-500/30 flex items-center justify-center flex-shrink-0">
+                                                        <span className="text-blue-400 font-bold text-xs">{row.employee.name[0]}</span>
+                                                    </div>
+                                                    <div>
+                                                        <p className="font-medium text-white text-xs">{row.employee.name}</p>
+                                                        <p className="text-[10px] text-slate-500">{row.employee.email}</p>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td className="text-center px-3 py-3 text-slate-200">{row.daysPresent}</td>
+                                            <td className="text-center px-3 py-3 text-amber-300">{row.leaveDays}</td>
+                                            <td className="text-center px-3 py-3 text-emerald-300">{row.overtimeHours.toFixed(1)}</td>
+                                            <td className="text-center px-3 py-3 text-orange-300">{row.earlyCheckouts}</td>
+                                            <td className="text-center px-3 py-3 text-purple-300">{row.holidayDays}</td>
+                                            <td className="text-center px-3 py-3">
+                                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${statusBadgeClass(row.currentStatus)}`}>
+                                                    {row.currentStatus}
+                                                </span>
+                                            </td>
+                                            <td className="text-center px-3 py-3">
+                                                {row.conflict
+                                                    ? <span className="flex items-center justify-center gap-1 text-red-400 text-xs font-semibold"><AlertTriangle className="w-3 h-3" />Yes</span>
+                                                    : <span className="text-slate-600 text-xs">—</span>
+                                                }
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                            {attOverview.overview.length === 0 && (
+                                <div className="text-center py-10 text-slate-500 text-sm">No employee data found for this period.</div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Summary cards */}
+                    {!attLoading && attOverview && attOverview.overview.length > 0 && (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            {[
+                                { label: "Avg. Present", value: (attOverview.overview.reduce((s: number, r: any) => s + r.daysPresent, 0) / attOverview.overview.length).toFixed(1), icon: <TrendingUp className="w-4 h-4 text-emerald-400" />, color: "text-emerald-400" },
+                                { label: "Total Leave Days", value: attOverview.overview.reduce((s: number, r: any) => s + r.leaveDays, 0), icon: <CalendarClock className="w-4 h-4 text-amber-400" />, color: "text-amber-400" },
+                                { label: "Total OT Hours", value: attOverview.overview.reduce((s: number, r: any) => s + r.overtimeHours, 0).toFixed(1), icon: <Clock className="w-4 h-4 text-blue-400" />, color: "text-blue-400" },
+                                { label: "Early Checkouts", value: attOverview.overview.reduce((s: number, r: any) => s + r.earlyCheckouts, 0), icon: <AlertTriangle className="w-4 h-4 text-orange-400" />, color: "text-orange-400" },
+                            ].map(c => (
+                                <div key={c.label} className="card flex items-center gap-3">
+                                    {c.icon}
+                                    <div>
+                                        <p className="text-xs text-slate-500">{c.label}</p>
+                                        <p className={`text-lg font-bold ${c.color}`}>{c.value}</p>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Attendance History Browser */}
+                    <div className="card space-y-4">
+                        <div className="flex items-center gap-2 mb-1">
+                            <History className="w-4 h-4 text-slate-400" />
+                            <h3 className="text-sm font-semibold text-slate-200">Attendance History</h3>
+                        </div>
+                        <div className="flex flex-wrap gap-3 items-end">
+                            <div>
+                                <p className="text-xs text-slate-500 mb-1">Employee</p>
+                                <select value={histEmpFilter} onChange={e => setHistEmpFilter(e.target.value)} className="input-field text-xs">
+                                    <option value="">All Employees</option>
+                                    {attEmpList.map((e: any) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <p className="text-xs text-slate-500 mb-1">From</p>
+                                <input type="date" value={histStart} onChange={e => setHistStart(e.target.value)} className="input-field text-xs" />
+                            </div>
+                            <div>
+                                <p className="text-xs text-slate-500 mb-1">To</p>
+                                <input type="date" value={histEnd} onChange={e => setHistEnd(e.target.value)} className="input-field text-xs" />
+                            </div>
+                            <button onClick={fetchHistory} disabled={histLoading} className="btn-primary text-xs">
+                                <Search className="w-3.5 h-3.5 inline mr-1" />{histLoading ? "Loading…" : "Search"}
+                            </button>
+                        </div>
+
+                        {histLoading && <div className="text-center py-6 text-slate-500 text-sm">Loading history…</div>}
+                        {!histLoading && attHistory.length === 0 && (
+                            <div className="text-center py-6 text-slate-600 text-sm">Search above to browse archived attendance records.</div>
+                        )}
+                        {!histLoading && attHistory.length > 0 && (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-xs">
+                                    <thead>
+                                        <tr className="border-b border-slate-700/50 text-slate-400">
+                                            <th className="text-left px-3 py-2">Employee</th>
+                                            <th className="text-left px-3 py-2">Date</th>
+                                            <th className="text-left px-3 py-2">Status</th>
+                                            <th className="text-left px-3 py-2">Check In</th>
+                                            <th className="text-left px-3 py-2">Check Out</th>
+                                            <th className="text-left px-3 py-2">OT (hrs)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {attHistory.map((h: any) => {
+                                            const otHours = h.overtimeStart && h.overtimeEnd
+                                                ? ((new Date(h.overtimeEnd).getTime() - new Date(h.overtimeStart).getTime()) / 3600000).toFixed(1)
+                                                : null;
+                                            return (
+                                                <tr key={h.id} className="border-b border-slate-800/40 hover:bg-slate-800/20">
+                                                    <td className="px-3 py-2 text-slate-200">{h.employee?.name || h.employeeName || "—"}</td>
+                                                    <td className="px-3 py-2 text-slate-400">{new Date(h.date).toLocaleDateString("en-GB")}</td>
+                                                    <td className="px-3 py-2">
+                                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${statusBadgeClass(h.attendanceStatus || "")}`}>
+                                                            {h.attendanceStatus || "—"}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-3 py-2 text-slate-400">{h.checkInTime ? new Date(h.checkInTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                                                    <td className="px-3 py-2 text-slate-400">{h.checkOutTime ? new Date(h.checkOutTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                                                    <td className="px-3 py-2 text-emerald-300">{otHours ? `${otHours}h` : "—"}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
 

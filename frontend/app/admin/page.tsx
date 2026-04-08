@@ -1,11 +1,11 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
-import { jobsAPI, quotationsAPI, vehiclesAPI, notificationsAPI, employeesAPI } from "@/lib/api";
+import { jobsAPI, quotationsAPI, vehiclesAPI, notificationsAPI, employeesAPI, attendanceAPI } from "@/lib/api";
 import { formatDate, JOB_TYPE_LABELS } from "@/lib/utils";
-import { Eye, ChevronRight, Send, Plus, Edit3, Search, Bell, X, Check, FileText, Clock, Users, UserCheck, UserX } from "lucide-react";
+import { Eye, ChevronRight, Send, Plus, Edit3, Search, Bell, X, Check, FileText, Clock, Users, UserCheck, UserX, CalendarClock, CheckCircle, XCircle, Umbrella, Star, Calendar, AlertTriangle } from "lucide-react";
 
-type Tab = "requests" | "quotations" | "notifications" | "search" | "employees";
+type Tab = "requests" | "quotations" | "notifications" | "search" | "employees" | "attendance";
 
 interface Job {
     id: string; jobNumber: number; jobType: string; status: string; notes: string; voiceNoteUrl?: string;
@@ -73,6 +73,11 @@ export default function AdminDashboard() {
     const [notifVehicle, setNotifVehicle] = useState("");
     const [sendingNotif, setSendingNotif] = useState(false);
 
+    // Attendance
+    const [attPending, setAttPending] = useState<{ requests: any[]; leaves: any[]; overtimes: any[]; holidays: any[] } | null>(null);
+    const [attLoading, setAttLoading] = useState(false);
+    const [attActionLoading, setAttActionLoading] = useState<string | null>(null);
+
     const fetchJobs = useCallback(async () => {
         const res = await jobsAPI.list();
         setJobs(res.data.filter((j: Job) => ["SUBMITTED", "REVIEWED"].includes(j.status)));
@@ -98,7 +103,22 @@ export default function AdminDashboard() {
             setEmpLoading(true);
             employeesAPI.list().then(r => setEmployees(r.data)).finally(() => setEmpLoading(false));
         }
+        if (tab === "attendance") {
+            setAttLoading(true);
+            attendanceAPI.adminPending().then(r => setAttPending(r.data)).finally(() => setAttLoading(false));
+        }
     }, [tab]);
+
+    const handleAttAction = async (action: () => Promise<unknown>, key: string) => {
+        setAttActionLoading(key);
+        try {
+            await action();
+            const r = await attendanceAPI.adminPending();
+            setAttPending(r.data);
+        } catch (e: any) {
+            alert(e?.response?.data?.error || "Action failed");
+        } finally { setAttActionLoading(null); }
+    };
 
     const handleCreateEmployee = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -201,6 +221,7 @@ export default function AdminDashboard() {
                     { key: "notifications", label: "Notifications", icon: <Bell className="w-3.5 h-3.5" />, count: unreadCount },
                     { key: "search", label: "Search Records", icon: <Search className="w-3.5 h-3.5" />, count: undefined as number | undefined },
                     { key: "employees", label: "Employees", icon: <Users className="w-3.5 h-3.5" />, count: undefined as number | undefined },
+                    { key: "attendance", label: "Attendance", icon: <CalendarClock className="w-3.5 h-3.5" />, count: attPending ? (attPending.requests.length + attPending.leaves.length + attPending.overtimes.length + attPending.holidays.length) : undefined },
                 ] as const).map(t => (
                     <button
                         key={t.key}
@@ -492,6 +513,172 @@ export default function AdminDashboard() {
                                     )}
                                 </div>
                             ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ── ATTENDANCE APPROVALS ── */}
+            {tab === "attendance" && (
+                <div className="space-y-6 animate-fade-in">
+                    {attLoading && <div className="text-center py-10 text-slate-500">Loading…</div>}
+
+                    {attPending && (attPending.requests.length + attPending.leaves.length + attPending.overtimes.length + attPending.holidays.length) === 0 && (
+                        <div className="card text-center py-12">
+                            <CheckCircle className="w-10 h-10 text-emerald-500 mx-auto mb-3" />
+                            <p className="text-slate-400">No pending attendance approvals</p>
+                        </div>
+                    )}
+
+                    {/* Check-in / Check-out / Early Checkout / Overtime requests */}
+                    {(attPending?.requests.length ?? 0) > 0 && (
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-400 mb-3 flex items-center gap-2">
+                                <CalendarClock className="w-4 h-4" />Attendance Requests ({attPending!.requests.length})
+                            </h3>
+                            <div className="space-y-3">
+                                {attPending!.requests.map((r: any) => (
+                                    <div key={r.id} className={`card flex items-start justify-between gap-4 flex-wrap ${r.type === "EARLY_CHECKOUT" ? "border-amber-500/30" : ""}`}>
+                                        <div>
+                                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                                                <span className="font-medium text-white text-sm">{r.employee.name}</span>
+                                                <span className={`text-xs px-2 py-0.5 rounded font-medium ${r.type === "CHECKIN" ? "bg-emerald-500/20 text-emerald-300" : r.type === "CHECKOUT" ? "bg-blue-500/20 text-blue-300" : r.type === "EARLY_CHECKOUT" ? "bg-amber-500/20 text-amber-300" : r.type === "OVERTIME_START" ? "bg-purple-500/20 text-purple-300" : r.type === "OVERTIME_END" ? "bg-indigo-500/20 text-indigo-300" : "bg-slate-500/20 text-slate-300"}`}>
+                                                    {r.type.replace(/_/g, " ")}
+                                                </span>
+                                                {r.type === "EARLY_CHECKOUT" && <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />}
+                                            </div>
+                                            <p className="text-xs text-slate-500">Requested: {new Date(r.requestedTime).toLocaleString()}</p>
+                                            {r.reason && <p className="text-xs text-slate-400 mt-1">Reason: {r.reason}</p>}
+                                        </div>
+                                        <div className="flex gap-2 ml-auto">
+                                            <button
+                                                onClick={() => handleAttAction(() => attendanceAPI.approveRequest(r.id), `req-approve-${r.id}`)}
+                                                disabled={attActionLoading === `req-approve-${r.id}`}
+                                                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                                            >
+                                                <CheckCircle className="w-3.5 h-3.5" />{attActionLoading === `req-approve-${r.id}` ? "…" : "Approve"}
+                                            </button>
+                                            <button
+                                                onClick={() => handleAttAction(() => attendanceAPI.rejectRequest(r.id), `req-reject-${r.id}`)}
+                                                disabled={attActionLoading === `req-reject-${r.id}`}
+                                                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/30 text-red-300 hover:bg-red-500/30 transition-colors"
+                                            >
+                                                <XCircle className="w-3.5 h-3.5" />{attActionLoading === `req-reject-${r.id}` ? "…" : "Reject"}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Leave requests */}
+                    {(attPending?.leaves.length ?? 0) > 0 && (
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-400 mb-3 flex items-center gap-2">
+                                <Umbrella className="w-4 h-4" />Leave Requests ({attPending!.leaves.length})
+                            </h3>
+                            <div className="space-y-3">
+                                {attPending!.leaves.map((l: any) => (
+                                    <div key={l.id} className="card flex items-start justify-between gap-4 flex-wrap">
+                                        <div>
+                                            <p className="font-medium text-white text-sm mb-1">{l.employee.name}</p>
+                                            <p className="text-xs text-slate-400">From: <span className="text-slate-200">{new Date(l.leaveFrom).toLocaleString()}</span></p>
+                                            <p className="text-xs text-slate-400">To: <span className="text-slate-200">{new Date(l.leaveTo).toLocaleString()}</span></p>
+                                            {l.reason && <p className="text-xs text-slate-400 mt-1">Reason: {l.reason}</p>}
+                                        </div>
+                                        <div className="flex gap-2 ml-auto">
+                                            <button
+                                                onClick={() => handleAttAction(() => attendanceAPI.approveLeave(l.id), `leave-approve-${l.id}`)}
+                                                disabled={attActionLoading === `leave-approve-${l.id}`}
+                                                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                                            >
+                                                <CheckCircle className="w-3.5 h-3.5" />{attActionLoading === `leave-approve-${l.id}` ? "…" : "Approve"}
+                                            </button>
+                                            <button
+                                                onClick={() => handleAttAction(() => attendanceAPI.rejectLeave(l.id), `leave-reject-${l.id}`)}
+                                                disabled={attActionLoading === `leave-reject-${l.id}`}
+                                                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/30 text-red-300 hover:bg-red-500/30 transition-colors"
+                                            >
+                                                <XCircle className="w-3.5 h-3.5" />{attActionLoading === `leave-reject-${l.id}` ? "…" : "Reject"}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Overtime requests */}
+                    {(attPending?.overtimes.length ?? 0) > 0 && (
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-400 mb-3 flex items-center gap-2">
+                                <Star className="w-4 h-4" />Overtime Requests ({attPending!.overtimes.length})
+                            </h3>
+                            <div className="space-y-3">
+                                {attPending!.overtimes.map((o: any) => (
+                                    <div key={o.id} className="card flex items-start justify-between gap-4 flex-wrap">
+                                        <div>
+                                            <p className="font-medium text-white text-sm mb-1">{o.employee.name}</p>
+                                            <p className="text-xs text-slate-400">Started: <span className="text-slate-200">{new Date(o.overtimeStart).toLocaleString()}</span></p>
+                                            {o.reason && <p className="text-xs text-slate-400 mt-1">Task: {o.reason}</p>}
+                                        </div>
+                                        <div className="flex gap-2 ml-auto">
+                                            <button
+                                                onClick={() => handleAttAction(() => attendanceAPI.approveOvertime(o.id), `ot-approve-${o.id}`)}
+                                                disabled={attActionLoading === `ot-approve-${o.id}`}
+                                                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                                            >
+                                                <CheckCircle className="w-3.5 h-3.5" />{attActionLoading === `ot-approve-${o.id}` ? "…" : "Approve"}
+                                            </button>
+                                            <button
+                                                onClick={() => handleAttAction(() => attendanceAPI.rejectOvertime(o.id), `ot-reject-${o.id}`)}
+                                                disabled={attActionLoading === `ot-reject-${o.id}`}
+                                                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/30 text-red-300 hover:bg-red-500/30 transition-colors"
+                                            >
+                                                <XCircle className="w-3.5 h-3.5" />{attActionLoading === `ot-reject-${o.id}` ? "…" : "Reject"}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Holiday requests */}
+                    {(attPending?.holidays.length ?? 0) > 0 && (
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-400 mb-3 flex items-center gap-2">
+                                <Calendar className="w-4 h-4" />Holiday Requests ({attPending!.holidays.length})
+                            </h3>
+                            <div className="space-y-3">
+                                {attPending!.holidays.map((h: any) => (
+                                    <div key={h.id} className="card flex items-start justify-between gap-4 flex-wrap">
+                                        <div>
+                                            <p className="font-medium text-white text-sm mb-1">{h.employee.name}</p>
+                                            <p className="text-xs text-slate-400">Date: <span className="text-slate-200">{new Date(h.holidayDate).toLocaleDateString()}</span></p>
+                                            {h.description && <p className="text-xs text-slate-400 mt-1">Reason: {h.description}</p>}
+                                            <p className="text-xs text-amber-400 mt-1">Approving will temporarily deactivate the employee account for this period.</p>
+                                        </div>
+                                        <div className="flex gap-2 ml-auto">
+                                            <button
+                                                onClick={() => handleAttAction(() => attendanceAPI.approveHoliday(h.id), `hol-approve-${h.id}`)}
+                                                disabled={attActionLoading === `hol-approve-${h.id}`}
+                                                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                                            >
+                                                <CheckCircle className="w-3.5 h-3.5" />{attActionLoading === `hol-approve-${h.id}` ? "…" : "Approve"}
+                                            </button>
+                                            <button
+                                                onClick={() => handleAttAction(() => attendanceAPI.rejectHoliday(h.id), `hol-reject-${h.id}`)}
+                                                disabled={attActionLoading === `hol-reject-${h.id}`}
+                                                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/30 text-red-300 hover:bg-red-500/30 transition-colors"
+                                            >
+                                                <XCircle className="w-3.5 h-3.5" />{attActionLoading === `hol-reject-${h.id}` ? "…" : "Reject"}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     )}
                 </div>

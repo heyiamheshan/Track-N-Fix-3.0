@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import dotenv from 'dotenv';
+import cron from 'node-cron';
 
 dotenv.config();
 
@@ -13,6 +14,8 @@ import vehicleRoutes from './routes/vehicles';
 import searchRoutes from './routes/search';
 import notificationRoutes from './routes/notifications';
 import voiceRoutes from './routes/voice';
+import attendanceRoutes from './routes/attendance';
+import prisma from './lib/prisma';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -41,9 +44,83 @@ app.use('/api/search', searchRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/voice', voiceRoutes);
+app.use('/api/attendance', attendanceRoutes);
 
 app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', message: 'TrackNFix API running', timestamp: new Date().toISOString() });
+});
+
+// ─── Scheduled Jobs ───────────────────────────────────────────────────────────
+
+// Daily at 18:30: auto-flag employees who checked in but haven't checked out (early checkout)
+cron.schedule('30 18 * * 1-6', async () => {
+    console.log('[CRON] Running auto early-checkout flag job');
+    try {
+        const today = new Date();
+        today.setUTCHours(0, 0, 0, 0);
+
+        const uncheckedOut = await prisma.attendance.findMany({
+            where: { date: today, checkInTime: { not: null }, checkOutTime: null },
+            include: { employee: { select: { name: true } } },
+        });
+
+        for (const att of uncheckedOut) {
+            const alreadyFlagged = await prisma.attendanceRequest.findFirst({
+                where: { employeeId: att.employeeId, type: 'EARLY_CHECKOUT', createdAt: { gte: today } },
+            });
+            if (alreadyFlagged) continue;
+
+            const now = new Date();
+            await prisma.attendanceRequest.create({
+                data: { employeeId: att.employeeId, type: 'EARLY_CHECKOUT', requestedTime: now, reason: 'Auto-flagged: no checkout recorded by closing time', status: 'PENDING' },
+            });
+            await prisma.notification.create({
+                data: { fromRole: 'EMPLOYEE', toRole: 'ADMIN', message: `⚠️ Auto-flag: ${att.employee.name} has no checkout recorded by closing time` },
+            });
+        }
+    } catch (err) {
+        console.error('[CRON] Auto early-checkout flag failed:', err);
+    }
+});
+
+// Daily at 00:05: reactivate employees whose holiday has ended
+cron.schedule('5 0 * * *', async () => {
+    console.log('[CRON] Running holiday reactivation check');
+    try {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        yesterday.setUTCHours(0, 0, 0, 0);
+
+        const expiredHolidays = await prisma.holiday.findMany({
+            where: { status: 'APPROVED', holidayDate: { lte: yesterday } },
+            include: { employee: true },
+        });
+
+        for (const h of expiredHolidays) {
+            if (!h.employee.isActive) {
+                await prisma.user.update({ where: { id: h.employeeId }, data: { isActive: true } });
+                console.log(`[CRON] Reactivated employee ${h.employee.name} after holiday`);
+            }
+        }
+    } catch (err) {
+        console.error('[CRON] Holiday reactivation failed:', err);
+    }
+});
+
+// Daily at 01:00: delete attendance_history records older than 6 months
+cron.schedule('0 1 * * *', async () => {
+    console.log('[CRON] Running attendance history cleanup');
+    try {
+        const sixMonthsAgo = new Date();
+        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+        const deleted = await prisma.attendanceHistory.deleteMany({
+            where: { archivedAt: { lt: sixMonthsAgo } },
+        });
+        console.log(`[CRON] Deleted ${deleted.count} old attendance history records`);
+    } catch (err) {
+        console.error('[CRON] Attendance history cleanup failed:', err);
+    }
 });
 
 app.listen(PORT, () => {

@@ -57,9 +57,21 @@ model User {
   updatedAt    DateTime  @updatedAt
 
   jobs              Job[]
-  adminQuotations   Quotation[]    @relation("AdminQuotations")
-  managerQuotations Quotation[]    @relation("ManagerQuotations")
+  adminQuotations   Quotation[]         @relation("AdminQuotations")
+  managerQuotations Quotation[]         @relation("ManagerQuotations")
   notifications     Notification[]
+
+  // Attendance relations
+  attendanceRecords  Attendance[]        @relation("EmployeeAttendance")
+  attendanceRequests AttendanceRequest[] @relation("EmployeeRequests")
+  adminReviews       AttendanceRequest[] @relation("AdminReviews")
+  leaves             Leave[]             @relation("EmployeeLeaves")
+  adminLeaves        Leave[]             @relation("AdminLeaves")
+  overtimes          Overtime[]          @relation("EmployeeOvertime")
+  adminOvertime      Overtime[]          @relation("AdminOvertime")
+  holidays           Holiday[]           @relation("EmployeeHolidays")
+  adminHolidays      Holiday[]           @relation("AdminHolidays")
+  attendanceHistory  AttendanceHistory[] @relation("EmployeeHistory")
 }
 
 model Vehicle {
@@ -157,4 +169,141 @@ model Notification {
   createdAt     DateTime @default(now())
 
   user User? @relation(fields: [userId], references: [id])
+}
+
+// ─── Attendance Module ───────────────────────────────────────────────────────
+
+enum AttendanceStatus {
+  PRESENT
+  EARLY_CHECKOUT
+  OVERTIME
+  HOLIDAY
+  ON_LEAVE
+  ABSENT
+}
+
+enum AttendanceRequestType {
+  CHECKIN
+  CHECKOUT
+  EARLY_CHECKOUT
+  OVERTIME_START
+  OVERTIME_END
+  LEAVE_START
+  LEAVE_END
+  HOLIDAY
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum OvertimeStatus {
+  PENDING
+  APPROVED
+  COMPLETED
+  REJECTED
+}
+
+model Attendance {
+  id           String           @id @default(uuid())
+  employeeId   String
+  date         DateTime         @db.Date
+  checkInTime  DateTime?
+  checkOutTime DateTime?
+  status       AttendanceStatus @default(PRESENT)
+  overtimeStart DateTime?
+  overtimeEnd  DateTime?
+  notes        String?
+  createdAt    DateTime         @default(now())
+
+  employee User @relation("EmployeeAttendance", fields: [employeeId], references: [id])
+
+  @@unique([employeeId, date])
+}
+
+model AttendanceRequest {
+  id            String                @id @default(uuid())
+  employeeId    String
+  type          AttendanceRequestType
+  requestedTime DateTime
+  reason        String?
+  status        RequestStatus         @default(PENDING)
+  adminId       String?
+  reviewedAt    DateTime?
+  createdAt     DateTime              @default(now())
+
+  employee User  @relation("EmployeeRequests", fields: [employeeId], references: [id])
+  admin    User? @relation("AdminReviews", fields: [adminId], references: [id])
+}
+
+model Leave {
+  id                String      @id @default(uuid())
+  employeeId        String
+  leaveFrom         DateTime
+  leaveTo           DateTime
+  reason            String?
+  status            LeaveStatus @default(PENDING)
+  leaveEndConfirmed Boolean     @default(false)
+  adminId           String?
+  createdAt         DateTime    @default(now())
+
+  employee User  @relation("EmployeeLeaves", fields: [employeeId], references: [id])
+  admin    User? @relation("AdminLeaves", fields: [adminId], references: [id])
+}
+
+model Overtime {
+  id            String         @id @default(uuid())
+  employeeId    String
+  overtimeStart DateTime
+  overtimeEnd   DateTime?
+  status        OvertimeStatus @default(PENDING)
+  endConfirmed  Boolean        @default(false)
+  adminId       String?
+  reason        String?
+  createdAt     DateTime       @default(now())
+
+  employee User  @relation("EmployeeOvertime", fields: [employeeId], references: [id])
+  admin    User? @relation("AdminOvertime", fields: [adminId], references: [id])
+}
+
+model Holiday {
+  id          String        @id @default(uuid())
+  employeeId  String
+  declaredBy  String?
+  holidayDate DateTime      @db.Date
+  description String?
+  status      RequestStatus @default(PENDING)
+  createdAt   DateTime      @default(now())
+
+  employee User  @relation("EmployeeHolidays", fields: [employeeId], references: [id])
+  admin    User? @relation("AdminHolidays", fields: [declaredBy], references: [id])
+}
+
+model AttendanceHistory {
+  id               String    @id @default(uuid())
+  employeeId       String
+  employeeName     String
+  date             DateTime
+  checkInTime      DateTime?
+  checkOutTime     DateTime?
+  attendanceStatus String?
+  leaveFrom        DateTime?
+  leaveTo          DateTime?
+  leaveReason      String?
+  leaveStatus      String?
+  overtimeStart    DateTime?
+  overtimeEnd      DateTime?
+  overtimeStatus   String?
+  notes            String?
+  archivedAt       DateTime  @default(now())
+
+  employee User @relation("EmployeeHistory", fields: [employeeId], references: [id])
 }

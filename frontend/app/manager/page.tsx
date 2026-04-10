@@ -1,13 +1,17 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
-import { quotationsAPI, notificationsAPI, employeesAPI, attendanceAPI, inventoryAPI } from "@/lib/api";
+import { quotationsAPI, notificationsAPI, employeesAPI, attendanceAPI, inventoryAPI, analyticsAPI } from "@/lib/api";
 import { formatDate, JOB_TYPE_LABELS } from "@/lib/utils";
-import { Edit3, Download, Bell, Search, X, Plus, CheckCircle, FileText, DollarSign, Users, CalendarClock, AlertTriangle, Archive, Clock, TrendingUp, History, Package, Pencil, Trash2, ChevronDown } from "lucide-react";
+import { Edit3, Download, Bell, Search, X, Plus, CheckCircle, FileText, DollarSign, Users, CalendarClock, AlertTriangle, Archive, Clock, TrendingUp, History, Package, Pencil, Trash2, ChevronDown, BarChart2, ShoppingCart, Percent, Activity } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import {
+    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+    ResponsiveContainer, Cell,
+} from "recharts";
 
-type Tab = "quotations" | "search" | "employees" | "attendance" | "inventory";
+type Tab = "quotations" | "search" | "employees" | "attendance" | "inventory" | "financials";
 
 interface SparePart {
     id: string; name: string; serialNumber: string; description?: string;
@@ -177,6 +181,35 @@ export default function ManagerDashboard() {
         setInvSearch("");
         setInvSearchResults([]);
     };
+
+    // Analytics / Financials
+    type AnalyticsSummary = {
+        period: { range: string; start: string; end: string };
+        revenue: { total: number; cogs: number; grossProfit: number; profitMargin: number };
+        jobs: { total: number; finalized: number; finalizationRate: number; aov: number };
+        byCategory: { jobType: string; revenue: number; cogs: number; grossProfit: number; jobCount: number }[];
+        inventory: {
+            totalValue: number; dailyConsumption: number;
+            topByValue: { id: string; name: string; quantity: number; boughtPrice: number; sellingPrice: number; stockValue: number; unitsConsumedInPeriod: number; lowStock: boolean }[];
+        };
+    };
+    const [finRange, setFinRange] = useState<"daily" | "weekly" | "monthly">("monthly");
+    const [finDate, setFinDate] = useState("");
+    const [finData, setFinData] = useState<AnalyticsSummary | null>(null);
+    const [finLoading, setFinLoading] = useState(false);
+
+    const fetchAnalytics = useCallback(async (range: "daily" | "weekly" | "monthly", date: string) => {
+        setFinLoading(true);
+        try {
+            const res = await analyticsAPI.summary(range, date || undefined);
+            setFinData(res.data);
+        } catch { /* silent */ }
+        finally { setFinLoading(false); }
+    }, []);
+
+    useEffect(() => {
+        if (tab === "financials") fetchAnalytics(finRange, finDate);
+    }, [tab, finRange, finDate, fetchAnalytics]);
 
     // Search
     const [searchQ, setSearchQ] = useState("");
@@ -532,6 +565,7 @@ export default function ManagerDashboard() {
                     { key: "employees", label: "Employees", icon: <Users className="w-3.5 h-3.5" />, count: undefined as number | undefined },
                     { key: "attendance", label: "Attendance", icon: <CalendarClock className="w-3.5 h-3.5" />, count: undefined as number | undefined },
                     { key: "inventory", label: "Inventory", icon: <Package className="w-3.5 h-3.5" />, count: parts.filter(p => p.quantity < p.lowStockThreshold).length || undefined },
+                    { key: "financials", label: "Financials", icon: <BarChart2 className="w-3.5 h-3.5" />, count: undefined as number | undefined },
                 ] as const).map(t => (
                     <button key={t.key} onClick={() => setTab(t.key as Tab)} className={`tab-btn flex items-center gap-1.5 ${tab === t.key ? "active" : ""}`}>
                         {t.icon}{t.label}
@@ -1093,6 +1127,226 @@ export default function ManagerDashboard() {
                             </div>
                         </div>
                     )}
+                </div>
+            )}
+
+            {/* ── FINANCIALS ── */}
+            {tab === "financials" && (
+                <div className="space-y-6 animate-fade-in">
+                    {/* Controls */}
+                    <div className="card flex flex-wrap items-end gap-4">
+                        <div>
+                            <p className="text-xs text-slate-500 mb-1">Period</p>
+                            <div className="flex gap-2">
+                                {(["daily", "weekly", "monthly"] as const).map(r => (
+                                    <button key={r} onClick={() => setFinRange(r)} className={`tab-btn text-xs ${finRange === r ? "active" : ""}`}>{r.charAt(0).toUpperCase() + r.slice(1)}</button>
+                                ))}
+                            </div>
+                        </div>
+                        <div>
+                            <p className="text-xs text-slate-500 mb-1">Reference date</p>
+                            <input type="date" value={finDate} onChange={e => setFinDate(e.target.value)} className="input-field text-xs" />
+                        </div>
+                        <button onClick={() => fetchAnalytics(finRange, finDate)} disabled={finLoading} className="btn-primary text-xs ml-auto">
+                            {finLoading ? "Loading…" : "Refresh"}
+                        </button>
+                    </div>
+
+                    {finLoading && <div className="text-center py-16 text-slate-500">Calculating financials…</div>}
+
+                    {!finLoading && finData && (() => {
+                        const { revenue, jobs, byCategory, inventory } = finData;
+                        const periodLabel = `${new Date(finData.period.start).toLocaleDateString("en-GB")} — ${new Date(finData.period.end).toLocaleDateString("en-GB")}`;
+
+                        const KPI_CARDS = [
+                            { label: "Gross Revenue", value: `LKR ${revenue.total.toLocaleString("en-LK", { minimumFractionDigits: 2 })}`, icon: <DollarSign className="w-5 h-5 text-emerald-400" />, color: "text-emerald-400" },
+                            { label: "COGS", value: `LKR ${revenue.cogs.toLocaleString("en-LK", { minimumFractionDigits: 2 })}`, icon: <ShoppingCart className="w-5 h-5 text-red-400" />, color: "text-red-400" },
+                            { label: "Gross Profit", value: `LKR ${revenue.grossProfit.toLocaleString("en-LK", { minimumFractionDigits: 2 })}`, icon: <TrendingUp className="w-5 h-5 text-blue-400" />, color: revenue.grossProfit >= 0 ? "text-blue-400" : "text-red-400" },
+                            { label: "Profit Margin", value: `${revenue.profitMargin.toFixed(1)}%`, icon: <Percent className="w-5 h-5 text-purple-400" />, color: revenue.profitMargin >= 30 ? "text-emerald-400" : revenue.profitMargin >= 10 ? "text-amber-400" : "text-red-400" },
+                            { label: "Avg. Order Value", value: `LKR ${jobs.aov.toLocaleString("en-LK", { minimumFractionDigits: 2 })}`, icon: <Activity className="w-5 h-5 text-cyan-400" />, color: "text-cyan-400" },
+                            { label: "Finalization Rate", value: `${jobs.finalizationRate.toFixed(1)}%`, icon: <CheckCircle className="w-5 h-5 text-amber-400" />, color: "text-amber-400" },
+                            { label: "Jobs (period)", value: jobs.total, icon: <FileText className="w-5 h-5 text-slate-400" />, color: "text-slate-200" },
+                            { label: "Finalized Jobs", value: jobs.finalized, icon: <CheckCircle className="w-5 h-5 text-emerald-400" />, color: "text-emerald-400" },
+                        ];
+
+                        const chartData = byCategory.map(c => ({
+                            name: JOB_TYPE_LABELS[c.jobType] || c.jobType,
+                            Revenue: parseFloat(c.revenue.toFixed(2)),
+                            COGS: parseFloat(c.cogs.toFixed(2)),
+                            "Gross Profit": parseFloat(c.grossProfit.toFixed(2)),
+                            Jobs: c.jobCount,
+                        }));
+
+                        const CATEGORY_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444"];
+
+                        return (
+                            <>
+                                <p className="text-xs text-slate-500 flex items-center gap-1"><Clock className="w-3 h-3" />{periodLabel}</p>
+
+                                {/* KPI Cards */}
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                    {KPI_CARDS.map(c => (
+                                        <div key={c.label} className="card flex items-center gap-3">
+                                            {c.icon}
+                                            <div className="min-w-0">
+                                                <p className="text-xs text-slate-500 truncate">{c.label}</p>
+                                                <p className={`text-base font-bold truncate ${c.color}`}>{c.value}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* Revenue & Profit breakdown bar chart */}
+                                {chartData.length > 0 && (
+                                    <div className="card">
+                                        <h3 className="text-sm font-semibold text-slate-200 mb-4 flex items-center gap-2">
+                                            <BarChart2 className="w-4 h-4 text-blue-400" />Revenue by Service Category
+                                        </h3>
+                                        <ResponsiveContainer width="100%" height={260}>
+                                            <BarChart data={chartData} margin={{ top: 4, right: 16, left: 8, bottom: 4 }}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                                                <XAxis dataKey="name" tick={{ fill: "#94a3b8", fontSize: 11 }} />
+                                                <YAxis tick={{ fill: "#94a3b8", fontSize: 10 }} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
+                                                <Tooltip
+                                                    contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }}
+                                                    labelStyle={{ color: "#e2e8f0" }}
+                                                    formatter={(v) => typeof v === "number" ? `LKR ${v.toLocaleString("en-LK")}` : v}
+                                                />
+                                                <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
+                                                <Bar dataKey="Revenue" fill="#3b82f6" radius={[3, 3, 0, 0]} />
+                                                <Bar dataKey="COGS" fill="#ef4444" radius={[3, 3, 0, 0]} />
+                                                <Bar dataKey="Gross Profit" fill="#10b981" radius={[3, 3, 0, 0]} />
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                )}
+
+                                {/* Job Volume vs Financial Value — per category detail table */}
+                                {byCategory.length > 0 && (
+                                    <div className="card">
+                                        <h3 className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2">
+                                            <Activity className="w-4 h-4 text-purple-400" />Service Category Performance
+                                        </h3>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-xs">
+                                                <thead>
+                                                    <tr className="border-b border-slate-700/50 text-slate-400">
+                                                        <th className="text-left px-3 py-2">Category</th>
+                                                        <th className="text-right px-3 py-2">Jobs</th>
+                                                        <th className="text-right px-3 py-2">Revenue (LKR)</th>
+                                                        <th className="text-right px-3 py-2">COGS (LKR)</th>
+                                                        <th className="text-right px-3 py-2">Gross Profit (LKR)</th>
+                                                        <th className="text-right px-3 py-2">Margin %</th>
+                                                        <th className="text-right px-3 py-2">Avg / Job (LKR)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {[...byCategory].sort((a, b) => b.revenue - a.revenue).map((c, idx) => {
+                                                        const margin = c.revenue > 0 ? (c.grossProfit / c.revenue * 100) : 0;
+                                                        const avgPerJob = c.jobCount > 0 ? c.revenue / c.jobCount : 0;
+                                                        return (
+                                                            <tr key={c.jobType} className="border-b border-slate-800/40 hover:bg-slate-800/20">
+                                                                <td className="px-3 py-2">
+                                                                    <span className="flex items-center gap-2">
+                                                                        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: CATEGORY_COLORS[idx % CATEGORY_COLORS.length] }} />
+                                                                        <span className="font-medium text-white">{JOB_TYPE_LABELS[c.jobType] || c.jobType}</span>
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-3 py-2 text-right text-slate-300">{c.jobCount}</td>
+                                                                <td className="px-3 py-2 text-right text-emerald-300">{c.revenue.toLocaleString("en-LK", { minimumFractionDigits: 2 })}</td>
+                                                                <td className="px-3 py-2 text-right text-red-400">{c.cogs.toLocaleString("en-LK", { minimumFractionDigits: 2 })}</td>
+                                                                <td className={`px-3 py-2 text-right font-semibold ${c.grossProfit >= 0 ? "text-blue-300" : "text-red-400"}`}>{c.grossProfit.toLocaleString("en-LK", { minimumFractionDigits: 2 })}</td>
+                                                                <td className={`px-3 py-2 text-right font-semibold ${margin >= 30 ? "text-emerald-400" : margin >= 10 ? "text-amber-400" : "text-red-400"}`}>{margin.toFixed(1)}%</td>
+                                                                <td className="px-3 py-2 text-right text-slate-300">{avgPerJob.toLocaleString("en-LK", { minimumFractionDigits: 2 })}</td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Inventory Financial Status */}
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                    <div className="card flex items-center gap-3">
+                                        <Package className="w-5 h-5 text-blue-400 flex-shrink-0" />
+                                        <div>
+                                            <p className="text-xs text-slate-500">Total Inventory Value</p>
+                                            <p className="text-base font-bold text-blue-400">LKR {inventory.totalValue.toLocaleString("en-LK", { minimumFractionDigits: 2 })}</p>
+                                            <p className="text-[10px] text-slate-600">Capital tied up in stock</p>
+                                        </div>
+                                    </div>
+                                    <div className="card flex items-center gap-3">
+                                        <ShoppingCart className="w-5 h-5 text-amber-400 flex-shrink-0" />
+                                        <div>
+                                            <p className="text-xs text-slate-500">Today's Stock Consumption</p>
+                                            <p className="text-base font-bold text-amber-400">LKR {inventory.dailyConsumption.toLocaleString("en-LK", { minimumFractionDigits: 2 })}</p>
+                                            <p className="text-[10px] text-slate-600">Parts cost used today</p>
+                                        </div>
+                                    </div>
+                                    <div className="card flex items-center gap-3">
+                                        <TrendingUp className="w-5 h-5 text-purple-400 flex-shrink-0" />
+                                        <div>
+                                            <p className="text-xs text-slate-500">Inv. to Revenue Ratio</p>
+                                            <p className="text-base font-bold text-purple-400">
+                                                {revenue.total > 0 ? `${(inventory.totalValue / revenue.total * 100).toFixed(1)}%` : "—"}
+                                            </p>
+                                            <p className="text-[10px] text-slate-600">Stock value vs period revenue</p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Liquidity / Top parts by capital */}
+                                {inventory.topByValue.length > 0 && (
+                                    <div className="card">
+                                        <h3 className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2">
+                                            <DollarSign className="w-4 h-4 text-emerald-400" />High-Value Inventory — Liquidity Tracker
+                                        </h3>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-xs">
+                                                <thead>
+                                                    <tr className="border-b border-slate-700/50 text-slate-400">
+                                                        <th className="text-left px-3 py-2">Part</th>
+                                                        <th className="text-right px-3 py-2">Stock</th>
+                                                        <th className="text-right px-3 py-2">Unit Cost</th>
+                                                        <th className="text-right px-3 py-2">Stock Value</th>
+                                                        <th className="text-right px-3 py-2">Used (period)</th>
+                                                        <th className="text-right px-3 py-2">Sell Price</th>
+                                                        <th className="text-center px-3 py-2">Status</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {inventory.topByValue.map(p => (
+                                                        <tr key={p.id} className={`border-b border-slate-800/40 hover:bg-slate-800/20 ${p.lowStock ? "bg-amber-500/5" : ""}`}>
+                                                            <td className="px-3 py-2 font-medium text-white">{p.name}</td>
+                                                            <td className={`px-3 py-2 text-right ${p.lowStock ? "text-amber-400 font-semibold" : "text-slate-300"}`}>{p.quantity}</td>
+                                                            <td className="px-3 py-2 text-right text-slate-400">{p.boughtPrice.toFixed(2)}</td>
+                                                            <td className="px-3 py-2 text-right text-blue-300 font-semibold">{p.stockValue.toLocaleString("en-LK", { minimumFractionDigits: 2 })}</td>
+                                                            <td className="px-3 py-2 text-right text-slate-300">{p.unitsConsumedInPeriod > 0 ? `×${p.unitsConsumedInPeriod}` : "—"}</td>
+                                                            <td className="px-3 py-2 text-right text-emerald-300">{p.sellingPrice.toFixed(2)}</td>
+                                                            <td className="px-3 py-2 text-center">
+                                                                {p.lowStock
+                                                                    ? <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-500/20 text-amber-300 font-medium">Low Stock</span>
+                                                                    : <span className="px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/20 text-emerald-300">OK</span>}
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {byCategory.length === 0 && revenue.total === 0 && (
+                                    <div className="card text-center py-12 text-slate-500">
+                                        <BarChart2 className="w-10 h-10 text-slate-700 mx-auto mb-3" />
+                                        No finalized quotations found for this period.
+                                    </div>
+                                )}
+                            </>
+                        );
+                    })()}
                 </div>
             )}
 

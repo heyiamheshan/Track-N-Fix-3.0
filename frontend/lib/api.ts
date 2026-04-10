@@ -88,6 +88,12 @@ export const employeesAPI = {
         api.patch(`/employees/${id}/status`, { isActive }),
 };
 
+// Analytics
+export const analyticsAPI = {
+    summary: (range: "daily" | "weekly" | "monthly", date?: string) =>
+        api.get(`/analytics/summary?range=${range}${date ? `&date=${date}` : ""}`),
+};
+
 // Inventory
 export const inventoryAPI = {
     list: () => api.get("/inventory"),

@@ -48,6 +48,13 @@ export default function ManagerDashboard() {
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [editQ, setEditQ] = useState<Quotation | null>(null);
     const [editItems, setEditItems] = useState<QuotationItem[]>([]);
+
+    // Create Quotation Context
+    const [createQJob, setCreateQJob] = useState<Job | null>(null);
+    const [qForm, setQForm] = useState({ vehicleNumber: "", ownerName: "", address: "", telephone: "", vehicleType: "", color: "", insuranceCompany: "", jobDetails: "" });
+    const [qItems, setQItems] = useState<{ description: string; partReplaced?: string; price: number; laborCost: number; quantity?: number; sparePartId?: string }[]>([{ description: "", partReplaced: "", price: 0, laborCost: 0, quantity: 1 }]);
+    const [qLoading, setQLoading] = useState(false);
+
     const [loading, setLoading] = useState(false);
     const [finalizing, setFinalizing] = useState(false);
     const [employees, setEmployees] = useState<any[]>([]);
@@ -157,6 +164,15 @@ export default function ManagerDashboard() {
         const n = [...editItems];
         n[idx] = { ...n[idx], description: part.name, partReplaced: part.serialNumber, price: part.sellingPrice, sparePartId: part.id, quantity: (n[idx] as any).quantity || 1 };
         setEditItems(n);
+        setInvSearchOpen(null);
+        setInvSearch("");
+        setInvSearchResults([]);
+    };
+
+    const selectPartForCreateItem = (idx: number, part: SparePart) => {
+        const n = [...qItems];
+        n[idx] = { ...n[idx], description: part.name, partReplaced: part.serialNumber, price: part.sellingPrice, sparePartId: part.id, quantity: (n[idx] as any).quantity || 1 };
+        setQItems(n);
         setInvSearchOpen(null);
         setInvSearch("");
         setInvSearchResults([]);
@@ -391,7 +407,7 @@ export default function ManagerDashboard() {
         autoTable(doc, {
             startY: itemsY + 6,
             head: [["#", "Description", "Part Replaced", "Qty", "Unit Parts (LKR)", "Labor (LKR)", "Total (LKR)"]],
-            body: editItems.filter(i => i.description).map((item, idx) => [
+            body: (q.items || []).filter(i => i.description).map((item, idx) => [
                 idx + 1,
                 item.description,
                 item.partReplaced || "—",
@@ -400,7 +416,7 @@ export default function ManagerDashboard() {
                 item.laborCost.toFixed(2),
                 itemSubtotal(item).toFixed(2),
             ]),
-            foot: [["", "", "", "GRAND TOTAL", "", "", `LKR ${total(editItems).toFixed(2)}`]],
+            foot: [["", "", "", "GRAND TOTAL", "", "", `LKR ${total(q.items || []).toFixed(2)}`]],
             styles: { fontSize: 9, cellPadding: 3 },
             headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: "bold" },
             footStyles: { fillColor: [15, 23, 42], textColor: 255, fontStyle: "bold" },
@@ -480,6 +496,28 @@ export default function ManagerDashboard() {
         });
 
         doc.save(`ServiceRecord_${v.vehicleNumber}.pdf`);
+    };
+
+    const submitQuotation = async () => {
+        if (!createQJob) return;
+        setQLoading(true);
+        try {
+            const res = await quotationsAPI.create({ ...qForm, jobId: createQJob.id || undefined, items: qItems.filter(i => i.description) });
+            setCreateQJob(null);
+            fetchData();
+            generatePDF(res.data);
+            alert("Quotation generated successfully and sent to your approval queue!");
+        } catch {
+            alert("Failed to create quotation");
+        } finally {
+            setQLoading(false);
+        }
+    };
+
+    const handleCreateCustomQuotation = () => {
+        setCreateQJob({ id: '' } as any);
+        setQForm({ vehicleNumber: searchQ || "", ownerName: "", address: "", telephone: "", vehicleType: "", color: "", insuranceCompany: "", jobDetails: "" });
+        setQItems([{ description: "", partReplaced: "", price: 0, laborCost: 0, quantity: 1 }]);
     };
 
     const unread = notifications.filter(n => !n.isRead).length;
@@ -596,7 +634,10 @@ export default function ManagerDashboard() {
                                 <button onClick={() => setSearchType("telephone")} className={`tab-btn text-xs ${searchType === "telephone" ? "active" : ""}`}>Telephone</button>
                             </div>
                             <input value={searchQ} onChange={e => setSearchQ(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSearch()} placeholder={searchType === "vehicleNumber" ? "e.g. CAA-1234" : "e.g. 0771234567"} className="input-field flex-1 min-w-48" />
-                            <button onClick={handleSearch} className="btn-primary text-sm"><Search className="w-4 h-4 inline mr-1" />Search</button>
+                            <div className="flex gap-2">
+                                <button onClick={handleSearch} className="btn-primary text-sm"><Search className="w-4 h-4 inline mr-1" />Search</button>
+                                <button onClick={handleCreateCustomQuotation} className="btn-success text-sm whitespace-nowrap"><Plus className="w-4 h-4 inline mr-1" />Create Custom Quotation</button>
+                            </div>
                         </div>
                     </div>
                     {searchError && <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-400 text-sm">{searchError}</div>}
@@ -649,7 +690,17 @@ export default function ManagerDashboard() {
                                             <p className="text-xs text-slate-400 mt-1">{formatDate(job.createdAt)}</p>
                                             {job.notes && <p className="text-sm text-slate-300 mt-2 whitespace-pre-wrap">{job.notes}</p>}
                                         </div>
-                                        <span className="text-xs text-slate-500">{job.images.length} photo{job.images.length !== 1 ? "s" : ""}</span>
+                                        <div className="flex flex-col items-end gap-2">
+                                            <span className="text-xs text-slate-500">{job.images.length} photo{job.images.length !== 1 ? "s" : ""}</span>
+                                            <button onClick={() => {
+                                                setCreateQJob(job);
+                                                const v = searchResult.vehicle;
+                                                setQForm({ vehicleNumber: v.vehicleNumber || "", ownerName: v.ownerName || "", address: v.address || "", telephone: v.telephone || "", vehicleType: v.vehicleType || "", color: v.color || "", insuranceCompany: job.insuranceCompany || "", jobDetails: job.notes || "" });
+                                                setQItems([{ description: "", partReplaced: "", price: 0, laborCost: 0, quantity: 1 }]);
+                                            }} className="btn-primary text-xs py-1 px-3 whitespace-nowrap">
+                                                <Plus className="w-3.5 h-3.5 inline mr-1" />Add Quotation
+                                            </button>
+                                        </div>
                                     </div>
                                     {job.images.length > 0 && (
                                         <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 mt-3">
@@ -1312,6 +1363,91 @@ export default function ManagerDashboard() {
                             <button onClick={finalize} disabled={finalizing || editItems.filter(i => i.description).length === 0} className="btn-success flex-1">
                                 <CheckCircle className="w-4 h-4 inline mr-1.5" />
                                 {finalizing ? "Finalizing…" : "Create Final Quotation & Download PDF"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {createQJob && (
+                <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex justify-center items-start overflow-y-auto p-4 z-50 animate-fade-in custom-scrollbar">
+                    <div className="bg-slate-800 border border-slate-700 w-full max-w-4xl rounded-2xl p-6 shadow-2xl my-8 relative">
+                        <button onClick={() => { setCreateQJob(null); setInvSearchOpen(null); setInvSearch(""); setInvSearchResults([]); }} className="absolute bg-slate-800/80 p-2 rounded-full border border-slate-600 top-4 right-4 text-slate-400 hover:text-white">
+                            <X className="w-5 h-5" />
+                        </button>
+                        <h2 className="text-xl font-bold mb-6 text-emerald-400">Generate Quotation</h2>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                            <div className="space-y-4">
+                                <div><p className="text-xs text-slate-500 mb-1">Vehicle Details</p>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <input value={qForm.vehicleNumber} onChange={e => setQForm({ ...qForm, vehicleNumber: e.target.value })} placeholder="Vehicle No. (e.g. CAA-1234)" className="input-field text-sm font-bold uppercase" />
+                                        <input value={qForm.ownerName} onChange={e => setQForm({ ...qForm, ownerName: e.target.value })} placeholder="Owner Name" className="input-field text-sm" />
+                                        <input value={qForm.telephone} onChange={e => setQForm({ ...qForm, telephone: e.target.value })} placeholder="Telephone" className="input-field text-sm" />
+                                        <input value={qForm.vehicleType} onChange={e => setQForm({ ...qForm, vehicleType: e.target.value })} placeholder="Vehicle Type" className="input-field text-sm" />
+                                        <input value={qForm.color} onChange={e => setQForm({ ...qForm, color: e.target.value })} placeholder="Color" className="input-field text-sm" />
+                                        <input value={qForm.insuranceCompany} onChange={e => setQForm({ ...qForm, insuranceCompany: e.target.value })} placeholder="Insurance Company" className="input-field text-sm" />
+                                        <input value={qForm.address} onChange={e => setQForm({ ...qForm, address: e.target.value })} placeholder="Address" className="col-span-2 input-field text-sm" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 mb-1">Job Details & Notes</p>
+                                    <textarea value={qForm.jobDetails} onChange={e => setQForm({ ...qForm, jobDetails: e.target.value })} className="input-field text-sm w-full h-24 custom-scrollbar" placeholder="Details..." />
+                                </div>
+                            </div>
+
+                            <div>
+                                <h4 className="text-sm font-semibold mb-3">Pricing Items</h4>
+                                <button onClick={() => setQItems([...qItems, { description: "", partReplaced: "", price: 0, laborCost: 0, quantity: 1 }])} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 mb-2"><Plus className="w-3 h-3" />Add Item</button>
+                                <div className="space-y-3 mb-3">
+                                    <div className="grid grid-cols-12 gap-2 text-xs text-slate-500 px-1">
+                                        <span className="col-span-4">Desc</span><span className="col-span-2">Part</span><span className="col-span-1">Qty</span><span className="col-span-2">Part(Rs)</span><span className="col-span-2">Labor(Rs)</span>
+                                    </div>
+                                    {qItems.map((item, i) => (
+                                        <div key={i} className="space-y-1">
+                                            <div className="grid grid-cols-12 gap-2">
+                                                <input value={item.description} onChange={e => { const n = [...qItems]; n[i].description = e.target.value; setQItems(n); }} placeholder="Job" className="input-field text-xs col-span-4" />
+                                                <input value={item.partReplaced || ""} onChange={e => { const n = [...qItems]; n[i].partReplaced = e.target.value; setQItems(n); }} placeholder="Part" className="input-field text-xs col-span-2" />
+                                                <input type="number" min="1" value={item.quantity ?? 1} onChange={e => { const n = [...qItems]; n[i].quantity = +e.target.value; setQItems(n); }} className="input-field text-xs col-span-1" />
+                                                <input type="number" value={item.price} onChange={e => { const n = [...qItems]; n[i].price = +e.target.value; setQItems(n); }} className="input-field text-xs col-span-2" />
+                                                <input type="number" value={item.laborCost} onChange={e => { const n = [...qItems]; n[i].laborCost = +e.target.value; setQItems(n); }} className="input-field text-xs col-span-2" />
+                                                <button onClick={() => setQItems(items => items.filter((_, j) => j !== i))} className="text-slate-500 hover:text-red-400 flex items-center justify-center col-span-1"><X className="w-3.5 h-3.5" /></button>
+                                            </div>
+                                            <div className="relative col-span-12 pl-1">
+                                                {invSearchOpen === i ? (
+                                                    <div className="flex gap-2 items-center">
+                                                        <input autoFocus value={invSearch} onChange={e => handleInvSearchChange(e.target.value)} placeholder="Search inventory..." className="input-field text-[10px] flex-1 py-1" />
+                                                        <button onClick={() => { setInvSearchOpen(null); setInvSearch(""); setInvSearchResults([]); }} className="text-xs text-slate-500 hover:text-red-400"><X className="w-3 h-3" /></button>
+                                                    </div>
+                                                ) : (
+                                                    <button onClick={() => { setInvSearchOpen(i); setInvSearch(""); setInvSearchResults([]); }} className="text-[10px] text-blue-400 hover:text-blue-300 flex items-center gap-1">
+                                                        <Package className="w-3 h-3" />{item.sparePartId ? <span className="text-emerald-400">Inventory Assigned</span> : "Pick part from inventory"}<ChevronDown className="w-3 h-3" />
+                                                    </button>
+                                                )}
+                                                {invSearchOpen === i && invSearchResults.length > 0 && (
+                                                    <div className="absolute z-10 top-7 left-0 right-0 bg-slate-800 border border-slate-600 rounded shadow-xl overflow-hidden">
+                                                        {invSearchResults.map(p => (
+                                                            <button key={p.id} onClick={() => selectPartForCreateItem(i, p)} className="w-full text-left px-2 py-1.5 hover:bg-slate-700 text-[10px] border-b border-slate-700/50 flex justify-between">
+                                                                <div><span className="text-white block">{p.name}</span><span className="text-slate-400 font-mono">{p.serialNumber}</span></div>
+                                                                <div className="text-right flex-shrink-0"><span className="text-emerald-300 block">Rs {p.sellingPrice}</span><span className={p.quantity < p.lowStockThreshold ? "text-amber-400" : "text-slate-400"}>Qty: {p.quantity}</span></div>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="flex items-center justify-between bg-blue-600/10 border border-blue-500/20 rounded px-4 py-3 mt-4">
+                                    <span className="text-sm font-semibold text-slate-300">Grand Total</span>
+                                    <span className="text-lg font-bold text-emerald-400">LKR {total(qItems).toFixed(2)}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex gap-3">
+                            <button onClick={() => { setCreateQJob(null); setInvSearchOpen(null); setInvSearch(""); setInvSearchResults([]); }} className="btn-secondary flex-1">Cancel</button>
+                            <button onClick={submitQuotation} disabled={qLoading || qItems.filter(i => i.description).length === 0} className="btn-success flex-1">
+                                <CheckCircle className="w-4 h-4 inline mr-1.5" />
+                                {qLoading ? "Generating Quotation…" : "Generate Quotation"}
                             </button>
                         </div>
                     </div>

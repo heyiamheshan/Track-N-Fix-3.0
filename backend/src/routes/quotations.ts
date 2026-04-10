@@ -6,7 +6,7 @@ import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 const router = Router();
 
 const createQuotationSchema = z.object({
-    jobId: z.string(),
+    jobId: z.string().optional(),
     vehicleNumber: z.string().min(1),
     ownerName: z.string().optional(),
     address: z.string().optional(),
@@ -23,8 +23,8 @@ const createQuotationSchema = z.object({
     })).optional(),
 });
 
-// POST /api/quotations - admin creates quotation
-router.post('/', authenticate, requireRole('ADMIN'), async (req: AuthRequest, res: Response): Promise<void> => {
+// POST /api/quotations - admin/manager creates quotation
+router.post('/', authenticate, requireRole('ADMIN', 'MANAGER'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const data = createQuotationSchema.parse(req.body);
 
@@ -46,9 +46,23 @@ router.post('/', authenticate, requireRole('ADMIN'), async (req: AuthRequest, re
             },
         });
 
+        let jobId = data.jobId;
+        if (!jobId) {
+            const proxyJob = await prisma.job.create({
+                data: {
+                    vehicleId: vehicle.id,
+                    employeeId: req.user!.id,
+                    jobType: 'SERVICE',
+                    status: 'QUOTED',
+                    notes: 'Auto-generated job for direct custom quotation.',
+                }
+            });
+            jobId = proxyJob.id;
+        }
+
         const quotation = await prisma.quotation.create({
             data: {
-                jobId: data.jobId,
+                jobId: jobId,
                 vehicleId: vehicle.id,
                 adminId: req.user!.id,
                 vehicleNumber: data.vehicleNumber,
@@ -59,7 +73,7 @@ router.post('/', authenticate, requireRole('ADMIN'), async (req: AuthRequest, re
                 color: data.color,
                 insuranceCompany: data.insuranceCompany,
                 jobDetails: data.jobDetails,
-                status: 'DRAFT',
+                status: req.user!.role === 'MANAGER' ? 'SENT_TO_MANAGER' : 'DRAFT',
             },
             include: { job: { include: { images: true } }, items: true },
         });
@@ -71,8 +85,10 @@ router.post('/', authenticate, requireRole('ADMIN'), async (req: AuthRequest, re
             });
         }
 
-        // Update job status to QUOTED
-        await prisma.job.update({ where: { id: data.jobId }, data: { status: 'QUOTED' } });
+        // Update job status to QUOTED if it existed
+        if (data.jobId) {
+            await prisma.job.update({ where: { id: data.jobId }, data: { status: 'QUOTED' } });
+        }
 
         const full = await prisma.quotation.findUnique({
             where: { id: quotation.id },

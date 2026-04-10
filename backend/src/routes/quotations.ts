@@ -90,7 +90,7 @@ router.post('/', authenticate, requireRole('ADMIN'), async (req: AuthRequest, re
 // GET /api/quotations - list quotations
 router.get('/', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-        const where = req.user!.role === 'MANAGER' ? { status: 'SENT_TO_MANAGER' as const } : {};
+        const where: any = req.user!.role === 'MANAGER' ? { status: { in: ['SENT_TO_MANAGER', 'FINALIZED'] } } : {};
         const quotations = await prisma.quotation.findMany({
             where,
             include: {
@@ -190,40 +190,88 @@ router.put('/:id/finalize', authenticate, requireRole('MANAGER'), async (req: Au
     try {
         const { items, totalAmount } = req.body;
 
+        // Collect inventory deductions needed
+        type ItemInput = { description: string; partReplaced?: string; price: number; laborCost: number; sparePartId?: string; quantity?: number };
+        const inventoryItems: { sparePartId: string; qty: number }[] = [];
         if (items && Array.isArray(items)) {
-            await prisma.quotationItem.deleteMany({ where: { quotationId: req.params.id } });
-            if (items.length > 0) {
-                await prisma.quotationItem.createMany({
-                    data: items.map((item: { description: string; partReplaced?: string; price: number; laborCost: number }) => ({
-                        ...item,
-                        quotationId: req.params.id,
-                    })),
-                });
+            for (const item of items as ItemInput[]) {
+                if (item.sparePartId && item.quantity && item.quantity > 0) {
+                    inventoryItems.push({ sparePartId: item.sparePartId, qty: item.quantity });
+                }
             }
         }
 
-        const quotation = await prisma.quotation.update({
-            where: { id: req.params.id },
-            data: {
-                status: 'FINALIZED',
-                managerId: req.user!.id,
-                totalAmount,
-            },
-            include: { job: { include: { images: true } }, vehicle: true, items: true },
+        // Verify sufficient stock before committing
+        for (const { sparePartId, qty } of inventoryItems) {
+            const part = await prisma.sparePart.findUnique({ where: { id: sparePartId } });
+            if (!part) { res.status(400).json({ error: `Spare part ${sparePartId} not found` }); return; }
+            if (part.quantity < qty) {
+                res.status(409).json({ error: `Insufficient stock for "${part.name}". Available: ${part.quantity}, Required: ${qty}` });
+                return;
+            }
+        }
+
+        // Fetch job for ledger reference
+        const quotationRef = await prisma.quotation.findUnique({ where: { id: req.params.id }, include: { job: true } });
+        if (!quotationRef) { res.status(404).json({ error: 'Quotation not found' }); return; }
+
+        // Atomic transaction: update items, finalize quotation, deduct inventory
+        await prisma.$transaction(async (tx) => {
+            if (items && Array.isArray(items)) {
+                await tx.quotationItem.deleteMany({ where: { quotationId: req.params.id } });
+                if (items.length > 0) {
+                    await tx.quotationItem.createMany({
+                        data: (items as ItemInput[]).map(item => ({
+                            description: item.description,
+                            partReplaced: item.partReplaced,
+                            price: item.price,
+                            laborCost: item.laborCost,
+                            sparePartId: item.sparePartId || null,
+                            quantity: item.quantity || 1,
+                            quotationId: req.params.id,
+                        })),
+                    });
+                }
+            }
+
+            await tx.quotation.update({
+                where: { id: req.params.id },
+                data: { status: 'FINALIZED', managerId: req.user!.id, totalAmount },
+            });
+
+            await tx.job.update({ where: { id: quotationRef.jobId }, data: { status: 'FINALIZED' } });
+
+            // Deduct inventory and record ledger entries
+            for (const { sparePartId, qty } of inventoryItems) {
+                await tx.sparePart.update({
+                    where: { id: sparePartId },
+                    data: { quantity: { decrement: qty } },
+                });
+                await tx.stockLedger.create({
+                    data: {
+                        sparePartId,
+                        change: -qty,
+                        reason: `Used in quotation for vehicle ${quotationRef.vehicleNumber}`,
+                        quotationId: req.params.id,
+                        jobNumber: quotationRef.job.jobNumber,
+                    },
+                });
+            }
+
+            await tx.notification.create({
+                data: {
+                    fromRole: 'MANAGER',
+                    toRole: 'ADMIN',
+                    message: `Quotation for vehicle ${quotationRef.vehicleNumber} has been finalized. Ready to notify customer.`,
+                    vehicleNumber: quotationRef.vehicleNumber,
+                    quotationId: req.params.id,
+                },
+            });
         });
 
-        // Update job status
-        await prisma.job.update({ where: { id: quotation.jobId }, data: { status: 'FINALIZED' } });
-
-        // Notify admin
-        await prisma.notification.create({
-            data: {
-                fromRole: 'MANAGER',
-                toRole: 'ADMIN',
-                message: `Quotation for vehicle ${quotation.vehicleNumber} has been finalized. Ready to notify customer.`,
-                vehicleNumber: quotation.vehicleNumber,
-                quotationId: quotation.id,
-            },
+        const quotation = await prisma.quotation.findUnique({
+            where: { id: req.params.id },
+            include: { job: { include: { images: true } }, vehicle: true, items: true },
         });
 
         res.json(quotation);

@@ -88,6 +88,16 @@ export const employeesAPI = {
         api.patch(`/employees/${id}/status`, { isActive }),
 };
 
+// Inventory
+export const inventoryAPI = {
+    list: () => api.get("/inventory"),
+    search: (q: string) => api.get(`/inventory/search?q=${encodeURIComponent(q)}`),
+    create: (data: object) => api.post("/inventory", data),
+    update: (id: string, data: object) => api.put(`/inventory/${id}`, data),
+    delete: (id: string) => api.delete(`/inventory/${id}`),
+    ledger: (id: string) => api.get(`/inventory/${id}/ledger`),
+};
+
 // Attendance
 export const attendanceAPI = {
     // Employee

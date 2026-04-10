@@ -1,16 +1,29 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
-import { quotationsAPI, notificationsAPI, employeesAPI, attendanceAPI } from "@/lib/api";
+import { quotationsAPI, notificationsAPI, employeesAPI, attendanceAPI, inventoryAPI } from "@/lib/api";
 import { formatDate, JOB_TYPE_LABELS } from "@/lib/utils";
-import { Edit3, Download, Bell, Search, X, Plus, CheckCircle, FileText, DollarSign, Users, CalendarClock, AlertTriangle, Archive, Clock, TrendingUp, History } from "lucide-react";
+import { Edit3, Download, Bell, Search, X, Plus, CheckCircle, FileText, DollarSign, Users, CalendarClock, AlertTriangle, Archive, Clock, TrendingUp, History, Package, Pencil, Trash2, ChevronDown } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-type Tab = "quotations" | "search" | "employees" | "attendance";
+type Tab = "quotations" | "search" | "employees" | "attendance" | "inventory";
+
+interface SparePart {
+    id: string; name: string; serialNumber: string; description?: string;
+    boughtPrice: number; sellingPrice: number; quantity: number;
+    lowStockThreshold: number; supplierName?: string; supplierDetails?: string;
+    purchaseDate?: string; createdAt: string;
+}
+
+const EMPTY_PART: Omit<SparePart, "id" | "createdAt"> = {
+    name: "", serialNumber: "", description: "", boughtPrice: 0, sellingPrice: 0,
+    quantity: 0, lowStockThreshold: 5, supplierName: "", supplierDetails: "", purchaseDate: "",
+};
 
 interface QuotationItem {
     id?: string; description: string; partReplaced?: string; price: number; laborCost: number;
+    sparePartId?: string; quantity?: number;
 }
 
 interface Job {
@@ -31,6 +44,7 @@ interface Notification { id: string; message: string; vehicleNumber?: string; is
 export default function ManagerDashboard() {
     const [tab, setTab] = useState<Tab>("quotations");
     const [quotations, setQuotations] = useState<Quotation[]>([]);
+    const [recentQuotations, setRecentQuotations] = useState<Quotation[]>([]);
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [editQ, setEditQ] = useState<Quotation | null>(null);
     const [editItems, setEditItems] = useState<QuotationItem[]>([]);
@@ -51,6 +65,102 @@ export default function ManagerDashboard() {
     const [histEnd, setHistEnd] = useState("");
     const [attArchiving, setAttArchiving] = useState(false);
     const [attEmpList, setAttEmpList] = useState<any[]>([]);
+
+    // Inventory
+    const [parts, setParts] = useState<SparePart[]>([]);
+    const [invTotalValue, setInvTotalValue] = useState(0);
+    const [invLoading, setInvLoading] = useState(false);
+    const [partForm, setPartForm] = useState<Omit<SparePart, "id" | "createdAt"> | null>(null);
+    const [editingPartId, setEditingPartId] = useState<string | null>(null);
+    const [partSaving, setPartSaving] = useState(false);
+    const [adjustReason, setAdjustReason] = useState("");
+    const [invSearch, setInvSearch] = useState("");
+    const [invSearchResults, setInvSearchResults] = useState<SparePart[]>([]);
+    const [invSearchOpen, setInvSearchOpen] = useState<number | null>(null); // index of item row being searched
+    const invSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Ledger
+    const [ledgerPart, setLedgerPart] = useState<SparePart | null>(null);
+    const [ledgerEntries, setLedgerEntries] = useState<{ id: string; change: number; reason?: string; quotationId?: string; jobNumber?: number; createdAt: string }[]>([]);
+    const [ledgerLoading, setLedgerLoading] = useState(false);
+
+    const openLedger = async (p: SparePart) => {
+        setLedgerPart(p);
+        setLedgerLoading(true);
+        try {
+            const res = await inventoryAPI.ledger(p.id);
+            setLedgerEntries(res.data);
+        } catch { setLedgerEntries([]); }
+        finally { setLedgerLoading(false); }
+    };
+
+    const fetchInventory = useCallback(async () => {
+        setInvLoading(true);
+        try {
+            const res = await inventoryAPI.list();
+            setParts(res.data.parts);
+            setInvTotalValue(res.data.totalValue);
+        } catch { /* silent */ }
+        finally { setInvLoading(false); }
+    }, []);
+
+    useEffect(() => {
+        if (tab === "inventory") fetchInventory();
+    }, [tab, fetchInventory]);
+
+    const openAddPart = () => { setEditingPartId(null); setPartForm({ ...EMPTY_PART }); setAdjustReason(""); };
+    const openEditPart = (p: SparePart) => {
+        setEditingPartId(p.id);
+        setPartForm({ name: p.name, serialNumber: p.serialNumber, description: p.description || "", boughtPrice: p.boughtPrice, sellingPrice: p.sellingPrice, quantity: p.quantity, lowStockThreshold: p.lowStockThreshold, supplierName: p.supplierName || "", supplierDetails: p.supplierDetails || "", purchaseDate: p.purchaseDate ? p.purchaseDate.slice(0, 10) : "" });
+        setAdjustReason("");
+    };
+
+    const savePart = async () => {
+        if (!partForm) return;
+        setPartSaving(true);
+        try {
+            const payload = { ...partForm, boughtPrice: +partForm.boughtPrice, sellingPrice: +partForm.sellingPrice, quantity: +partForm.quantity, lowStockThreshold: +partForm.lowStockThreshold, adjustmentReason: adjustReason || undefined };
+            if (editingPartId) {
+                await inventoryAPI.update(editingPartId, payload);
+            } else {
+                await inventoryAPI.create(payload);
+            }
+            setPartForm(null);
+            setEditingPartId(null);
+            fetchInventory();
+        } catch (e: any) {
+            alert(e?.response?.data?.error || "Failed to save part");
+        } finally { setPartSaving(false); }
+    };
+
+    const deletePart = async (id: string, name: string) => {
+        if (!confirm(`Delete "${name}" from inventory?`)) return;
+        try { await inventoryAPI.delete(id); fetchInventory(); }
+        catch { alert("Failed to delete part"); }
+    };
+
+    const searchInventoryParts = useCallback(async (q: string) => {
+        if (!q.trim()) { setInvSearchResults([]); return; }
+        try {
+            const res = await inventoryAPI.search(q);
+            setInvSearchResults(res.data);
+        } catch { setInvSearchResults([]); }
+    }, []);
+
+    const handleInvSearchChange = (q: string) => {
+        setInvSearch(q);
+        if (invSearchTimer.current) clearTimeout(invSearchTimer.current);
+        invSearchTimer.current = setTimeout(() => searchInventoryParts(q), 300);
+    };
+
+    const selectPartForItem = (idx: number, part: SparePart) => {
+        const n = [...editItems];
+        n[idx] = { ...n[idx], description: part.name, partReplaced: part.serialNumber, price: part.sellingPrice, sparePartId: part.id, quantity: (n[idx] as any).quantity || 1 };
+        setEditItems(n);
+        setInvSearchOpen(null);
+        setInvSearch("");
+        setInvSearchResults([]);
+    };
 
     // Search
     const [searchQ, setSearchQ] = useState("");
@@ -87,7 +197,7 @@ export default function ManagerDashboard() {
             const res = await attendanceAPI.archive();
             alert(`Archived ${res.data.archived ?? 0} records successfully.`);
             fetchOverview(attPeriod, attDate);
-            attendanceAPI.managerEmployees().then(r => setAttEmpList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+            attendanceAPI.managerEmployees().then(r => setAttEmpList(Array.isArray(r.data) ? r.data : [])).catch(() => { });
         } catch { alert("Archive failed. Please try again."); }
         finally { setAttArchiving(false); }
     };
@@ -170,7 +280,8 @@ export default function ManagerDashboard() {
         setLoading(true);
         try {
             const [qRes, nRes] = await Promise.all([quotationsAPI.list(), notificationsAPI.list()]);
-            setQuotations(qRes.data);
+            setQuotations(qRes.data.filter((q: any) => q.status === "SENT_TO_MANAGER"));
+            setRecentQuotations(qRes.data.filter((q: any) => q.status === "FINALIZED"));
             setNotifications(nRes.data);
         } finally {
             setLoading(false);
@@ -189,7 +300,7 @@ export default function ManagerDashboard() {
     useEffect(() => {
         if (tab === "attendance") {
             fetchOverview(attPeriod, attDate);
-            attendanceAPI.managerEmployees().then(r => setAttEmpList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+            attendanceAPI.managerEmployees().then(r => setAttEmpList(Array.isArray(r.data) ? r.data : [])).catch(() => { });
         }
     }, [tab, attPeriod, attDate, fetchOverview]);
 
@@ -198,7 +309,8 @@ export default function ManagerDashboard() {
         setEditItems(q.items.length > 0 ? q.items.map(i => ({ ...i })) : [{ description: "", price: 0, laborCost: 0, partReplaced: "" }]);
     };
 
-    const total = (items: QuotationItem[]) => items.reduce((s, i) => s + (i.price || 0) + (i.laborCost || 0), 0);
+    const itemSubtotal = (i: QuotationItem) => ((i.price || 0) + (i.laborCost || 0)) * (i.quantity || 1);
+    const total = (items: QuotationItem[]) => items.reduce((s, i) => s + itemSubtotal(i), 0);
 
     const finalize = async () => {
         if (!editQ) return;
@@ -207,10 +319,12 @@ export default function ManagerDashboard() {
             await quotationsAPI.finalize(editQ.id, { items: editItems.filter(i => i.description), totalAmount: total(editItems) });
             const updated = { ...editQ, items: editItems, totalAmount: total(editItems), status: "FINALIZED" };
             generatePDF(updated);
-            setEditQ(null);
+            setEditQ(null); setInvSearchOpen(null); setInvSearch(""); setInvSearchResults([]);
             fetchData();
-        } catch { alert("Failed to finalize"); }
-        finally { setFinalizing(false); }
+        } catch (e: any) {
+            const msg = e?.response?.data?.error || "Failed to finalize quotation.";
+            alert(msg);
+        } finally { setFinalizing(false); }
     };
 
     const generatePDF = (q: Quotation) => {
@@ -276,16 +390,17 @@ export default function ManagerDashboard() {
 
         autoTable(doc, {
             startY: itemsY + 6,
-            head: [["#", "Description", "Part Replaced", "Parts Cost (LKR)", "Labor Cost (LKR)", "Total (LKR)"]],
+            head: [["#", "Description", "Part Replaced", "Qty", "Unit Parts (LKR)", "Labor (LKR)", "Total (LKR)"]],
             body: editItems.filter(i => i.description).map((item, idx) => [
                 idx + 1,
                 item.description,
                 item.partReplaced || "—",
+                item.quantity || 1,
                 item.price.toFixed(2),
                 item.laborCost.toFixed(2),
-                (item.price + item.laborCost).toFixed(2),
+                itemSubtotal(item).toFixed(2),
             ]),
-            foot: [["", "", "GRAND TOTAL", "", "", `LKR ${total(editItems).toFixed(2)}`]],
+            foot: [["", "", "", "GRAND TOTAL", "", "", `LKR ${total(editItems).toFixed(2)}`]],
             styles: { fontSize: 9, cellPadding: 3 },
             headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: "bold" },
             footStyles: { fillColor: [15, 23, 42], textColor: 255, fontStyle: "bold" },
@@ -378,6 +493,7 @@ export default function ManagerDashboard() {
                     { key: "search", label: "Search Records", icon: <Search className="w-3.5 h-3.5" />, count: undefined as number | undefined },
                     { key: "employees", label: "Employees", icon: <Users className="w-3.5 h-3.5" />, count: undefined as number | undefined },
                     { key: "attendance", label: "Attendance", icon: <CalendarClock className="w-3.5 h-3.5" />, count: undefined as number | undefined },
+                    { key: "inventory", label: "Inventory", icon: <Package className="w-3.5 h-3.5" />, count: parts.filter(p => p.quantity < p.lowStockThreshold).length || undefined },
                 ] as const).map(t => (
                     <button key={t.key} onClick={() => setTab(t.key as Tab)} className={`tab-btn flex items-center gap-1.5 ${tab === t.key ? "active" : ""}`}>
                         {t.icon}{t.label}
@@ -484,6 +600,27 @@ export default function ManagerDashboard() {
                         </div>
                     </div>
                     {searchError && <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-400 text-sm">{searchError}</div>}
+                    {!searchResult && recentQuotations.length > 0 && (
+                        <div className="card mt-2 border-blue-500/10">
+                            <h3 className="text-sm font-semibold mb-3 text-slate-300 flex items-center gap-2">
+                                <History className="w-4 h-4 text-blue-400" /> Recently Done Quotations
+                            </h3>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[500px] overflow-y-auto pr-1 custom-scrollbar">
+                                {recentQuotations.map((q) => (
+                                    <div key={q.id} className="p-3 bg-slate-800/40 rounded-lg border border-slate-700/50 hover:border-blue-500/30 transition-colors flex justify-between items-center cursor-pointer" onClick={() => { setSearchType("vehicleNumber"); setSearchQ(q.vehicleNumber); setTimeout(handleSearch, 100); }}>
+                                        <div>
+                                            <p className="text-sm font-bold text-blue-400 tracking-wide">{q.vehicleNumber}</p>
+                                            <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">{formatDate(q.createdAt)}</p>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-xs font-semibold text-emerald-400">Rs {q.totalAmount?.toLocaleString()}</p>
+                                            <span className="badge badge-green mt-1 text-[9px] px-1.5 py-0">FINALIZED</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                     {searchResult && (
                         <div className="space-y-4 animate-fade-in">
                             <div className="card border-blue-500/20">
@@ -751,6 +888,299 @@ export default function ManagerDashboard() {
                 </div>
             )}
 
+            {/* ── INVENTORY ── */}
+            {tab === "inventory" && (
+                <div className="space-y-6 animate-fade-in">
+                    {/* Summary cards */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="card flex items-center gap-3">
+                            <Package className="w-5 h-5 text-blue-400 flex-shrink-0" />
+                            <div>
+                                <p className="text-xs text-slate-500">Total Parts</p>
+                                <p className="text-lg font-bold text-white">{parts.length}</p>
+                            </div>
+                        </div>
+                        <div className="card flex items-center gap-3">
+                            <DollarSign className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+                            <div>
+                                <p className="text-xs text-slate-500">Total Asset Value</p>
+                                <p className="text-lg font-bold text-emerald-400">LKR {invTotalValue.toLocaleString("en-LK", { minimumFractionDigits: 2 })}</p>
+                            </div>
+                        </div>
+                        <div className="card flex items-center gap-3">
+                            <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" />
+                            <div>
+                                <p className="text-xs text-slate-500">Low-Stock Items</p>
+                                <p className="text-lg font-bold text-amber-400">{parts.filter(p => p.quantity < p.lowStockThreshold).length}</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Low-stock alert */}
+                    {parts.filter(p => p.quantity < p.lowStockThreshold).length > 0 && (
+                        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 flex items-center gap-2 text-amber-300 text-sm">
+                            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                            <span><strong>Low stock:</strong> {parts.filter(p => p.quantity < p.lowStockThreshold).map(p => `${p.name} (${p.quantity} left)`).join(" · ")}</span>
+                        </div>
+                    )}
+
+                    <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-semibold text-slate-200">Spare Parts Vault</h3>
+                        <button onClick={openAddPart} className="btn-primary text-xs flex items-center gap-1.5">
+                            <Plus className="w-3.5 h-3.5" />Add Part
+                        </button>
+                    </div>
+
+                    {invLoading && <div className="text-center py-10 text-slate-500">Loading inventory…</div>}
+                    {!invLoading && parts.length === 0 && (
+                        <div className="card text-center py-10 text-slate-500">
+                            <Package className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                            No parts registered yet. Click "Add Part" to begin.
+                        </div>
+                    )}
+
+                    {!invLoading && parts.length > 0 && (
+                        <div className="card overflow-x-auto p-0">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="border-b border-slate-700/50 text-xs text-slate-400">
+                                        <th className="text-left px-4 py-3">Part</th>
+                                        <th className="text-left px-3 py-3">Serial No.</th>
+                                        <th className="text-right px-3 py-3">Qty</th>
+                                        <th className="text-right px-3 py-3">Bought (LKR)</th>
+                                        <th className="text-right px-3 py-3">Sell (LKR)</th>
+                                        <th className="text-right px-3 py-3">Margin</th>
+                                        <th className="text-left px-3 py-3">Supplier</th>
+                                        <th className="text-center px-3 py-3">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {parts.map(p => {
+                                        const margin = p.sellingPrice > 0 ? ((p.sellingPrice - p.boughtPrice) / p.sellingPrice * 100).toFixed(1) : "0.0";
+                                        const isLow = p.quantity < p.lowStockThreshold;
+                                        return (
+                                            <tr key={p.id} className={`border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${isLow ? "bg-amber-500/5" : ""}`}>
+                                                <td className="px-4 py-3">
+                                                    <p className="font-medium text-white text-xs">{p.name}</p>
+                                                    {p.description && <p className="text-[10px] text-slate-500 truncate max-w-[140px]">{p.description}</p>}
+                                                </td>
+                                                <td className="px-3 py-3 text-slate-400 text-xs font-mono">{p.serialNumber}</td>
+                                                <td className={`px-3 py-3 text-right font-semibold text-xs ${isLow ? "text-amber-400" : "text-slate-200"}`}>
+                                                    {p.quantity}
+                                                    {isLow && <span className="ml-1 text-[9px] bg-amber-500/20 text-amber-300 px-1 py-0.5 rounded">LOW</span>}
+                                                </td>
+                                                <td className="px-3 py-3 text-right text-slate-300 text-xs">{p.boughtPrice.toFixed(2)}</td>
+                                                <td className="px-3 py-3 text-right text-emerald-300 text-xs">{p.sellingPrice.toFixed(2)}</td>
+                                                <td className="px-3 py-3 text-right text-blue-300 text-xs">{margin}%</td>
+                                                <td className="px-3 py-3 text-slate-400 text-xs">{p.supplierName || "—"}</td>
+                                                <td className="px-3 py-3 text-center">
+                                                    <div className="flex items-center justify-center gap-2">
+                                                        <button onClick={() => openLedger(p)} title="Stock ledger" className="text-slate-400 hover:text-emerald-400 transition-colors"><History className="w-3.5 h-3.5" /></button>
+                                                        <button onClick={() => openEditPart(p)} title="Edit" className="text-slate-400 hover:text-blue-400 transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
+                                                        <button onClick={() => deletePart(p.id, p.name)} title="Delete" className="text-slate-400 hover:text-red-400 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+
+                    {/* Profit Analysis */}
+                    {!invLoading && parts.length > 0 && (
+                        <div className="card space-y-3">
+                            <div className="flex items-center gap-2">
+                                <TrendingUp className="w-4 h-4 text-blue-400" />
+                                <h3 className="text-sm font-semibold text-slate-200">Profit Margin Analysis</h3>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-xs">
+                                    <thead>
+                                        <tr className="border-b border-slate-700/50 text-slate-400">
+                                            <th className="text-left px-3 py-2">Part</th>
+                                            <th className="text-right px-3 py-2">Bought (LKR)</th>
+                                            <th className="text-right px-3 py-2">Sell (LKR)</th>
+                                            <th className="text-right px-3 py-2">Profit / Unit</th>
+                                            <th className="text-right px-3 py-2">Margin %</th>
+                                            <th className="text-right px-3 py-2">Stock Value</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {[...parts].sort((a, b) => {
+                                            const ma = a.sellingPrice > 0 ? (a.sellingPrice - a.boughtPrice) / a.sellingPrice : 0;
+                                            const mb = b.sellingPrice > 0 ? (b.sellingPrice - b.boughtPrice) / b.sellingPrice : 0;
+                                            return mb - ma;
+                                        }).map(p => {
+                                            const profitPerUnit = p.sellingPrice - p.boughtPrice;
+                                            const margin = p.sellingPrice > 0 ? (profitPerUnit / p.sellingPrice * 100) : 0;
+                                            const stockValue = p.boughtPrice * p.quantity;
+                                            return (
+                                                <tr key={p.id} className="border-b border-slate-800/40 hover:bg-slate-800/20">
+                                                    <td className="px-3 py-2 text-slate-200">{p.name}</td>
+                                                    <td className="px-3 py-2 text-right text-slate-400">{p.boughtPrice.toFixed(2)}</td>
+                                                    <td className="px-3 py-2 text-right text-emerald-300">{p.sellingPrice.toFixed(2)}</td>
+                                                    <td className={`px-3 py-2 text-right font-medium ${profitPerUnit >= 0 ? "text-emerald-300" : "text-red-400"}`}>
+                                                        {profitPerUnit >= 0 ? "+" : ""}{profitPerUnit.toFixed(2)}
+                                                    </td>
+                                                    <td className={`px-3 py-2 text-right font-semibold ${margin >= 30 ? "text-emerald-400" : margin >= 10 ? "text-amber-400" : "text-red-400"}`}>
+                                                        {margin.toFixed(1)}%
+                                                    </td>
+                                                    <td className="px-3 py-2 text-right text-slate-300">{stockValue.toFixed(2)}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                    <tfoot>
+                                        <tr className="bg-slate-800/50 font-semibold">
+                                            <td className="px-3 py-2 text-slate-300" colSpan={5}>Total Inventory Cost</td>
+                                            <td className="px-3 py-2 text-right text-emerald-400">{parts.reduce((s, p) => s + p.boughtPrice * p.quantity, 0).toFixed(2)}</td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ── STOCK LEDGER MODAL ── */}
+            {ledgerPart && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                    <div className="card max-w-2xl w-full max-h-[85vh] overflow-y-auto animate-fade-in">
+                        <div className="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 className="font-semibold text-lg">Stock Ledger</h3>
+                                <p className="text-sm text-slate-400">{ledgerPart.name} · <span className="font-mono text-xs">{ledgerPart.serialNumber}</span></p>
+                            </div>
+                            <button onClick={() => setLedgerPart(null)}><X className="w-5 h-5 text-slate-500" /></button>
+                        </div>
+                        <div className="flex items-center gap-4 mb-4 bg-slate-800/40 rounded-xl px-4 py-3 text-sm">
+                            <div><p className="text-xs text-slate-500">Current Stock</p><p className="font-bold text-white">{ledgerPart.quantity}</p></div>
+                            <div><p className="text-xs text-slate-500">Threshold</p><p className="font-bold text-amber-400">{ledgerPart.lowStockThreshold}</p></div>
+                            <div><p className="text-xs text-slate-500">Bought Price</p><p className="font-bold text-slate-300">LKR {ledgerPart.boughtPrice.toFixed(2)}</p></div>
+                            <div><p className="text-xs text-slate-500">Sell Price</p><p className="font-bold text-emerald-400">LKR {ledgerPart.sellingPrice.toFixed(2)}</p></div>
+                        </div>
+                        {ledgerLoading && <div className="text-center py-8 text-slate-500 text-sm">Loading ledger…</div>}
+                        {!ledgerLoading && ledgerEntries.length === 0 && (
+                            <div className="text-center py-8 text-slate-600 text-sm">No ledger entries yet. Stock changes will appear here.</div>
+                        )}
+                        {!ledgerLoading && ledgerEntries.length > 0 && (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-xs">
+                                    <thead>
+                                        <tr className="border-b border-slate-700/50 text-slate-400">
+                                            <th className="text-left px-3 py-2">Date</th>
+                                            <th className="text-center px-3 py-2">Change</th>
+                                            <th className="text-left px-3 py-2">Reason</th>
+                                            <th className="text-center px-3 py-2">Job #</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {ledgerEntries.map(e => (
+                                            <tr key={e.id} className="border-b border-slate-800/40 hover:bg-slate-800/20">
+                                                <td className="px-3 py-2 text-slate-400">{new Date(e.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
+                                                <td className="px-3 py-2 text-center">
+                                                    <span className={`font-bold ${e.change > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                                        {e.change > 0 ? "+" : ""}{e.change}
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2 text-slate-300">{e.reason || "—"}</td>
+                                                <td className="px-3 py-2 text-center text-slate-400">{e.jobNumber ? `#${e.jobNumber}` : "—"}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                        <div className="mt-4 flex justify-end">
+                            <button onClick={() => setLedgerPart(null)} className="btn-secondary text-sm">Close</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── ADD / EDIT PART MODAL ── */}
+            {partForm !== null && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                    <div className="card max-w-lg w-full max-h-[90vh] overflow-y-auto animate-fade-in">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="font-semibold text-lg">{editingPartId ? "Edit Part" : "Add New Part"}</h3>
+                            <button onClick={() => setPartForm(null)}><X className="w-5 h-5 text-slate-500" /></button>
+                        </div>
+                        <div className="space-y-3">
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <p className="text-xs text-slate-500 mb-1">Part Name *</p>
+                                    <input value={partForm.name} onChange={e => setPartForm(f => f && ({ ...f, name: e.target.value }))} className="input-field text-sm w-full" placeholder="e.g. Brake Pad" />
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 mb-1">Serial / Part No. *</p>
+                                    <input value={partForm.serialNumber} onChange={e => setPartForm(f => f && ({ ...f, serialNumber: e.target.value }))} className="input-field text-sm w-full" placeholder="e.g. BP-4421" />
+                                </div>
+                            </div>
+                            <div>
+                                <p className="text-xs text-slate-500 mb-1">Description</p>
+                                <input value={partForm.description || ""} onChange={e => setPartForm(f => f && ({ ...f, description: e.target.value }))} className="input-field text-sm w-full" placeholder="Optional description" />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <p className="text-xs text-slate-500 mb-1">Bought Price (LKR) *</p>
+                                    <input type="number" min="0" value={partForm.boughtPrice} onChange={e => setPartForm(f => f && ({ ...f, boughtPrice: +e.target.value }))} className="input-field text-sm w-full" />
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 mb-1">Selling Price (LKR) *</p>
+                                    <input type="number" min="0" value={partForm.sellingPrice} onChange={e => setPartForm(f => f && ({ ...f, sellingPrice: +e.target.value }))} className="input-field text-sm w-full" />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <p className="text-xs text-slate-500 mb-1">Quantity in Stock *</p>
+                                    <input type="number" min="0" value={partForm.quantity} onChange={e => setPartForm(f => f && ({ ...f, quantity: +e.target.value }))} className="input-field text-sm w-full" />
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 mb-1">Low-Stock Threshold</p>
+                                    <input type="number" min="0" value={partForm.lowStockThreshold} onChange={e => setPartForm(f => f && ({ ...f, lowStockThreshold: +e.target.value }))} className="input-field text-sm w-full" />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <p className="text-xs text-slate-500 mb-1">Supplier Name</p>
+                                    <input value={partForm.supplierName || ""} onChange={e => setPartForm(f => f && ({ ...f, supplierName: e.target.value }))} className="input-field text-sm w-full" />
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 mb-1">Date of Purchase</p>
+                                    <input type="date" value={partForm.purchaseDate || ""} onChange={e => setPartForm(f => f && ({ ...f, purchaseDate: e.target.value }))} className="input-field text-sm w-full" />
+                                </div>
+                            </div>
+                            <div>
+                                <p className="text-xs text-slate-500 mb-1">Supplier Details</p>
+                                <input value={partForm.supplierDetails || ""} onChange={e => setPartForm(f => f && ({ ...f, supplierDetails: e.target.value }))} className="input-field text-sm w-full" placeholder="Contact, address, etc." />
+                            </div>
+                            {editingPartId && (
+                                <div>
+                                    <p className="text-xs text-slate-500 mb-1">Reason for Stock Adjustment (required if qty changed)</p>
+                                    <input value={adjustReason} onChange={e => setAdjustReason(e.target.value)} className="input-field text-sm w-full" placeholder="e.g. Damaged goods removed" />
+                                </div>
+                            )}
+                            {partForm.boughtPrice > 0 && partForm.sellingPrice > 0 && (
+                                <div className="bg-blue-600/10 border border-blue-500/20 rounded-xl px-4 py-2 text-xs text-slate-300 flex justify-between">
+                                    <span>Profit margin</span>
+                                    <span className="font-semibold text-blue-300">{((partForm.sellingPrice - partForm.boughtPrice) / partForm.sellingPrice * 100).toFixed(1)}%</span>
+                                </div>
+                            )}
+                        </div>
+                        <div className="flex gap-3 mt-5">
+                            <button onClick={() => setPartForm(null)} className="btn-secondary flex-1">Cancel</button>
+                            <button onClick={savePart} disabled={partSaving || !partForm.name || !partForm.serialNumber} className="btn-success flex-1">
+                                {partSaving ? "Saving…" : editingPartId ? "Save Changes" : "Add to Inventory"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* ══ EDIT & PRICE QUOTATION MODAL ══ */}
             {editQ && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -760,7 +1190,7 @@ export default function ManagerDashboard() {
                                 <h3 className="font-semibold text-lg">Quotation — {editQ.vehicleNumber}</h3>
                                 <p className="text-sm text-slate-500">Job #{editQ.job.jobNumber} · {JOB_TYPE_LABELS[editQ.job.jobType]}</p>
                             </div>
-                            <button onClick={() => setEditQ(null)}><X className="w-5 h-5 text-slate-500" /></button>
+                            <button onClick={() => { setEditQ(null); setInvSearchOpen(null); setInvSearch(""); setInvSearchResults([]); }}><X className="w-5 h-5 text-slate-500" /></button>
                         </div>
 
                         {/* Vehicle & job info (read-only) */}
@@ -806,22 +1236,68 @@ export default function ManagerDashboard() {
                         <div className="mb-4">
                             <div className="flex items-center justify-between mb-3">
                                 <h4 className="text-sm font-semibold">Pricing Items</h4>
-                                <button onClick={() => setEditItems(i => [...i, { description: "", partReplaced: "", price: 0, laborCost: 0 }])} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"><Plus className="w-3 h-3" />Add Item</button>
+                                <button onClick={() => setEditItems(i => [...i, { description: "", partReplaced: "", price: 0, laborCost: 0, quantity: 1 }])} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"><Plus className="w-3 h-3" />Add Item</button>
                             </div>
-                            <div className="space-y-2 mb-3">
+                            <div className="space-y-3 mb-3">
                                 <div className="grid grid-cols-12 gap-2 text-xs text-slate-500 px-1">
                                     <span className="col-span-4">Description</span>
-                                    <span className="col-span-3">Part Replaced</span>
+                                    <span className="col-span-2">Part / Serial</span>
+                                    <span className="col-span-1">Qty</span>
                                     <span className="col-span-2">Parts (LKR)</span>
                                     <span className="col-span-2">Labor (LKR)</span>
                                 </div>
                                 {editItems.map((item, i) => (
-                                    <div key={i} className="grid grid-cols-12 gap-2">
-                                        <input value={item.description} onChange={e => { const n = [...editItems]; n[i].description = e.target.value; setEditItems(n); }} placeholder="e.g. Engine oil change" className="input-field text-xs col-span-4" />
-                                        <input value={item.partReplaced || ""} onChange={e => { const n = [...editItems]; n[i].partReplaced = e.target.value; setEditItems(n); }} placeholder="Part name" className="input-field text-xs col-span-3" />
-                                        <input type="number" value={item.price} onChange={e => { const n = [...editItems]; n[i].price = +e.target.value; setEditItems(n); }} className="input-field text-xs col-span-2" />
-                                        <input type="number" value={item.laborCost} onChange={e => { const n = [...editItems]; n[i].laborCost = +e.target.value; setEditItems(n); }} className="input-field text-xs col-span-2" />
-                                        <button onClick={() => setEditItems(items => items.filter((_, j) => j !== i))} className="text-slate-500 hover:text-red-400 flex items-center justify-center col-span-1"><X className="w-3.5 h-3.5" /></button>
+                                    <div key={i} className="space-y-1">
+                                        <div className="grid grid-cols-12 gap-2">
+                                            <input value={item.description} onChange={e => { const n = [...editItems]; n[i].description = e.target.value; setEditItems(n); }} placeholder="e.g. Engine oil change" className="input-field text-xs col-span-4" />
+                                            <input value={item.partReplaced || ""} onChange={e => { const n = [...editItems]; n[i].partReplaced = e.target.value; setEditItems(n); }} placeholder="Part name" className="input-field text-xs col-span-2" />
+                                            <input type="number" min="1" value={item.quantity ?? 1} onChange={e => { const n = [...editItems]; n[i].quantity = +e.target.value; setEditItems(n); }} className="input-field text-xs col-span-1" />
+                                            <input type="number" value={item.price} onChange={e => { const n = [...editItems]; n[i].price = +e.target.value; setEditItems(n); }} className="input-field text-xs col-span-2" />
+                                            <input type="number" value={item.laborCost} onChange={e => { const n = [...editItems]; n[i].laborCost = +e.target.value; setEditItems(n); }} className="input-field text-xs col-span-2" />
+                                            <button onClick={() => setEditItems(items => items.filter((_, j) => j !== i))} className="text-slate-500 hover:text-red-400 flex items-center justify-center col-span-1"><X className="w-3.5 h-3.5" /></button>
+                                        </div>
+                                        {/* Inventory part search for this row */}
+                                        <div className="relative col-span-12 pl-1">
+                                            {invSearchOpen === i ? (
+                                                <div className="flex gap-2 items-center">
+                                                    <input
+                                                        autoFocus
+                                                        value={invSearch}
+                                                        onChange={e => handleInvSearchChange(e.target.value)}
+                                                        placeholder="Search inventory by name or serial…"
+                                                        className="input-field text-xs flex-1"
+                                                    />
+                                                    <button onClick={() => { setInvSearchOpen(null); setInvSearch(""); setInvSearchResults([]); }} className="text-xs text-slate-500 hover:text-red-400"><X className="w-3 h-3" /></button>
+                                                </div>
+                                            ) : (
+                                                <button onClick={() => { setInvSearchOpen(i); setInvSearch(""); setInvSearchResults([]); }} className="text-[10px] text-blue-400 hover:text-blue-300 flex items-center gap-1">
+                                                    <Package className="w-3 h-3" />
+                                                    {item.sparePartId ? <span className="text-emerald-400">Linked to inventory</span> : "Pick from inventory"}
+                                                    <ChevronDown className="w-3 h-3" />
+                                                </button>
+                                            )}
+                                            {invSearchOpen === i && invSearchResults.length > 0 && (
+                                                <div className="absolute z-10 top-7 left-0 right-0 bg-slate-800 border border-slate-600 rounded-xl shadow-xl overflow-hidden">
+                                                    {invSearchResults.map(p => (
+                                                        <button key={p.id} onClick={() => selectPartForItem(i, p)} className="w-full text-left px-3 py-2 hover:bg-slate-700 transition-colors border-b border-slate-700/50 last:border-0">
+                                                            <div className="flex items-center justify-between gap-3">
+                                                                <div>
+                                                                    <p className="text-xs font-medium text-white">{p.name}</p>
+                                                                    <p className="text-[10px] text-slate-400 font-mono">{p.serialNumber}</p>
+                                                                </div>
+                                                                <div className="text-right flex-shrink-0">
+                                                                    <p className="text-xs text-emerald-300">LKR {p.sellingPrice.toFixed(2)}</p>
+                                                                    <p className={`text-[10px] ${p.quantity < p.lowStockThreshold ? "text-amber-400" : "text-slate-400"}`}>{p.quantity} in stock</p>
+                                                                </div>
+                                                            </div>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {invSearchOpen === i && invSearch.length > 1 && invSearchResults.length === 0 && (
+                                                <div className="absolute z-10 top-7 left-0 right-0 bg-slate-800 border border-slate-600 rounded-xl shadow-xl px-3 py-2 text-xs text-slate-500">No parts found.</div>
+                                            )}
+                                        </div>
                                     </div>
                                 ))}
                             </div>
@@ -832,7 +1308,7 @@ export default function ManagerDashboard() {
                         </div>
 
                         <div className="flex gap-3">
-                            <button onClick={() => setEditQ(null)} className="btn-secondary flex-1">Cancel</button>
+                            <button onClick={() => { setEditQ(null); setInvSearchOpen(null); setInvSearch(""); setInvSearchResults([]); }} className="btn-secondary flex-1">Cancel</button>
                             <button onClick={finalize} disabled={finalizing || editItems.filter(i => i.description).length === 0} className="btn-success flex-1">
                                 <CheckCircle className="w-4 h-4 inline mr-1.5" />
                                 {finalizing ? "Finalizing…" : "Create Final Quotation & Download PDF"}

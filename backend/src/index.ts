@@ -15,6 +15,7 @@ import searchRoutes from './routes/search';
 import notificationRoutes from './routes/notifications';
 import voiceRoutes from './routes/voice';
 import attendanceRoutes from './routes/attendance';
+import inventoryRoutes from './routes/inventory';
 import prisma from './lib/prisma';
 
 const app = express();
@@ -45,6 +46,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/voice', voiceRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/inventory', inventoryRoutes);
 
 app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', message: 'TrackNFix API running', timestamp: new Date().toISOString() });

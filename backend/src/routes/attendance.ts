@@ -458,9 +458,9 @@ router.get('/manager/overview', authenticate, requireRole('MANAGER'), async (req
             endDate,
             overview: Object.values(overviewMap)
         });
-    } catch (err) {
+    } catch (err: any) {
         console.error('[GET /manager/overview]', err);
-        res.status(500).json({ error: 'Error fetching overview' });
+        res.status(500).json({ error: 'Error fetching overview', details: err.message, stack: err.stack });
     }
 });
 
@@ -536,9 +536,9 @@ router.get('/manager/employees', authenticate, requireRole('MANAGER'), async (_r
         });
 
         res.json(list);
-    } catch (err) {
+    } catch (err: any) {
         console.error('[GET /manager/employees]', err);
-        res.status(500).json({ error: 'Error fetching snapshot employees' });
+        res.status(500).json({ error: 'Error fetching snapshot employees', details: err.message, stack: err.stack });
     }
 });
 

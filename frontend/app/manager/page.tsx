@@ -329,8 +329,8 @@ export default function ManagerDashboard() {
         setLoading(true);
         try {
             const [qRes, nRes] = await Promise.all([quotationsAPI.list(), notificationsAPI.list()]);
-            setQuotations(qRes.data.filter((q: any) => q.status === "SENT_TO_MANAGER"));
-            setRecentQuotations(qRes.data.filter((q: any) => q.status === "FINALIZED"));
+            setQuotations(qRes.data.filter((q: any) => ["SENT_TO_MANAGER", "FINALIZED", "CUSTOMER_NOTIFIED"].includes(q.status)));
+            setRecentQuotations(qRes.data.filter((q: any) => ["FINALIZED", "CUSTOMER_NOTIFIED"].includes(q.status)));
             setNotifications(nRes.data);
         } finally {
             setLoading(false);
@@ -633,19 +633,28 @@ export default function ManagerDashboard() {
                                 <div>
                                     <div className="flex items-center gap-2 mb-1">
                                         <span className="font-semibold text-white">{q.vehicleNumber}</span>
-                                        <span className={`badge ${q.status === "FINALIZED" ? "badge-green" : "badge-yellow"}`}>{q.status}</span>
+                                        <span className={`badge ${q.status === "CUSTOMER_NOTIFIED" ? "badge-green" : q.status === "FINALIZED" ? "badge-yellow" : "badge-blue"}`}>
+                                            {q.status === "CUSTOMER_NOTIFIED" ? "Customer Notified" : q.status}
+                                        </span>
                                         <span className="badge badge-blue">{JOB_TYPE_LABELS[q.job.jobType]}</span>
                                     </div>
                                     <p className="text-sm text-slate-400">{q.ownerName || "Unknown owner"} · {q.telephone || "No phone"}</p>
                                     <p className="text-sm text-slate-400">{q.vehicleType} · {q.color}</p>
                                     {q.totalAmount && <p className="text-emerald-400 font-medium text-sm mt-1">LKR {q.totalAmount.toFixed(2)}</p>}
                                     <p className="text-xs text-slate-600 mt-1">{formatDate(q.createdAt)} · {q.items.length} items</p>
+                                    {q.status === "CUSTOMER_NOTIFIED" && (q as any).notifiedAt && (
+                                        <p className="text-xs text-emerald-500 mt-1 flex items-center gap-1">
+                                            <CheckCircle className="w-3 h-3" />Notified {new Date((q as any).notifiedAt).toLocaleString("en-GB")}
+                                        </p>
+                                    )}
                                 </div>
                                 <div className="flex gap-2 ml-auto flex-wrap">
-                                    <button onClick={() => openEdit(q)} className="btn-secondary text-xs">
-                                        <Edit3 className="w-3.5 h-3.5 inline mr-1" />Edit & Price
-                                    </button>
-                                    {q.status === "FINALIZED" && (
+                                    {q.status === "SENT_TO_MANAGER" && (
+                                        <button onClick={() => openEdit(q)} className="btn-secondary text-xs">
+                                            <Edit3 className="w-3.5 h-3.5 inline mr-1" />Edit & Price
+                                        </button>
+                                    )}
+                                    {(q.status === "FINALIZED" || q.status === "CUSTOMER_NOTIFIED") && (
                                         <button onClick={() => generatePDF(q)} className="btn-primary text-xs">
                                             <Download className="w-3.5 h-3.5 inline mr-1" />Download PDF
                                         </button>

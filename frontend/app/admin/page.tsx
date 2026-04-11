@@ -3,9 +3,9 @@ import { useState, useEffect, useCallback } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { jobsAPI, quotationsAPI, vehiclesAPI, notificationsAPI, employeesAPI, attendanceAPI } from "@/lib/api";
 import { formatDate, JOB_TYPE_LABELS } from "@/lib/utils";
-import { Eye, ChevronRight, Send, Plus, Edit3, Search, Bell, X, Check, FileText, Clock, Users, UserCheck, UserX, CalendarClock, CheckCircle, XCircle, Umbrella, Star, Calendar, AlertTriangle } from "lucide-react";
+import { Eye, ChevronRight, Send, Plus, Edit3, Search, Bell, X, Check, FileText, Clock, Users, UserCheck, UserX, CalendarClock, CheckCircle, XCircle, Umbrella, Star, Calendar, AlertTriangle, MessageCircle, Truck } from "lucide-react";
 
-type Tab = "requests" | "quotations" | "notifications" | "search" | "employees" | "attendance";
+type Tab = "requests" | "quotations" | "delivery" | "notifications" | "search" | "employees" | "attendance";
 
 interface Job {
     id: string; jobNumber: number; jobType: string; status: string; notes: string; voiceNoteUrl?: string;
@@ -16,8 +16,10 @@ interface Job {
 
 interface Quotation {
     id: string; vehicleNumber: string; ownerName?: string; telephone?: string;
-    vehicleType?: string; color?: string; status: string; createdAt: string;
-    job: Job; items: { id: string; description: string; price: number; laborCost: number; partReplaced?: string }[];
+    whatsappNumber?: string; vehicleType?: string; color?: string; insuranceCompany?: string;
+    status: string; createdAt: string; totalAmount?: number;
+    notificationSent: boolean; notifiedAt?: string;
+    job: Job; items: { id: string; description: string; price: number; laborCost: number; partReplaced?: string; quantity?: number }[];
 }
 
 interface Notification {
@@ -55,7 +57,7 @@ export default function AdminDashboard() {
     // Quotation form
     const [showQuotationForm, setShowQuotationForm] = useState(false);
     const [quotationJob, setQuotationJob] = useState<Job | null>(null);
-    const [qForm, setQForm] = useState({ vehicleNumber: "", ownerName: "", address: "", telephone: "", vehicleType: "", color: "", insuranceCompany: "", jobDetails: "" });
+    const [qForm, setQForm] = useState({ vehicleNumber: "", ownerName: "", address: "", telephone: "", whatsappNumber: "", vehicleType: "", color: "", insuranceCompany: "", jobDetails: "" });
     const [qItems, setQItems] = useState([{ description: "", partReplaced: "", price: 0, laborCost: 0 }]);
     const [qLoading, setQLoading] = useState(false);
 
@@ -67,11 +69,51 @@ export default function AdminDashboard() {
 
     // Edit quotation modal
     const [editQuotation, setEditQuotation] = useState<Quotation | null>(null);
+    const [editForm, setEditForm] = useState({ ownerName: "", telephone: "", whatsappNumber: "", vehicleType: "", color: "" });
+    const [editSaving, setEditSaving] = useState(false);
 
-    // Notification compose
-    const [notifMessage, setNotifMessage] = useState("");
-    const [notifVehicle, setNotifVehicle] = useState("");
-    const [sendingNotif, setSendingNotif] = useState(false);
+    // Delivery / WhatsApp
+    const [markingNotified, setMarkingNotified] = useState<string | null>(null);
+    const [previewQ, setPreviewQ] = useState<Quotation | null>(null);
+
+    const MAPS_LINK = "https://maps.app.goo.gl/jayakodyauto"; // update with real link
+
+    const buildWhatsAppMessage = (q: Quotation) => {
+        const serviceType = JOB_TYPE_LABELS[q.job.jobType] || q.job.jobType;
+        const amount = q.totalAmount ? `Rs. ${q.totalAmount.toFixed(2)}` : "to be confirmed";
+        return (
+            `Hello ${q.ownerName || "Valued Customer"}, this is Jayakody Auto Electrical.\n\n` +
+            `Your vehicle *${q.vehicleNumber}* is now ready for pickup! 🚗\n\n` +
+            `• *Service Type:* ${serviceType}\n` +
+            `• *Final Bill:* ${amount}\n\n` +
+            `Workshop Location: ${MAPS_LINK}\n\n` +
+            `Thank you for choosing Jayakody Auto Electrical Automobile Workshop!`
+        );
+    };
+
+    const openWhatsApp = (q: Quotation) => {
+        const phone = (q.whatsappNumber || "").replace(/\D/g, "");
+        if (!phone) { alert("No WhatsApp number on record for this customer."); return; }
+        // Sri Lankan numbers: prepend country code if local format
+        const intl = phone.startsWith("94") ? phone : `94${phone.replace(/^0/, "")}`;
+        const msg = encodeURIComponent(buildWhatsAppMessage(q));
+        window.open(`https://wa.me/${intl}?text=${msg}`, "_blank", "noopener,noreferrer");
+        setPreviewQ(q);
+    };
+
+    const handleMarkNotified = async (q: Quotation) => {
+        setMarkingNotified(q.id);
+        try {
+            await quotationsAPI.markNotified(q.id);
+            setPreviewQ(null);
+            fetchQuotations();
+            fetchNotifications();
+        } catch (e: any) {
+            alert(e?.response?.data?.error || "Failed to mark as notified");
+        } finally { setMarkingNotified(null); }
+    };
+
+    // Notification compose states obsolete and removed
 
     // Attendance
     const [attPending, setAttPending] = useState<{ requests: any[]; leaves: any[]; overtimes: any[]; holidays: any[] } | null>(null);
@@ -85,7 +127,7 @@ export default function AdminDashboard() {
 
     const fetchQuotations = useCallback(async () => {
         const res = await quotationsAPI.list();
-        setQuotations(res.data.filter((q: Quotation) => ["DRAFT", "SENT_TO_MANAGER"].includes(q.status)));
+        setQuotations(res.data);
     }, []);
 
     const fetchNotifications = useCallback(async () => {
@@ -150,13 +192,13 @@ export default function AdminDashboard() {
     const proceedToQuotation = async (job: Job) => {
         setQuotationJob(job);
         const vn = job.vehicle.vehicleNumber;
-        setQForm({ vehicleNumber: vn, ownerName: "", address: "", telephone: "", vehicleType: "", color: "", insuranceCompany: job.insuranceCompany || "", jobDetails: job.notes || "" });
+        setQForm({ vehicleNumber: vn, ownerName: "", address: "", telephone: "", whatsappNumber: "", vehicleType: "", color: "", insuranceCompany: job.insuranceCompany || "", jobDetails: job.notes || "" });
         setQItems([{ description: "", partReplaced: "", price: 0, laborCost: 0 }]);
         // Try auto-fill
         try {
             const vRes = await vehiclesAPI.lookup(vn);
             const v = vRes.data;
-            setQForm(f => ({ ...f, ownerName: v.ownerName || "", address: v.address || "", telephone: v.telephone || "", vehicleType: v.vehicleType || "", color: v.color || "" }));
+            setQForm(f => ({ ...f, ownerName: v.ownerName || "", address: v.address || "", telephone: v.telephone || "", whatsappNumber: v.whatsappNumber || "", vehicleType: v.vehicleType || "", color: v.color || "" }));
         } catch { /* new vehicle */ }
         setReviewJob(null);
         setShowQuotationForm(true);
@@ -179,8 +221,24 @@ export default function AdminDashboard() {
     };
 
     const sendToManager = async (qId: string) => {
-        await quotationsAPI.send(qId);
-        fetchQuotations();
+        try {
+            await quotationsAPI.send(qId);
+            fetchQuotations();
+        } catch (e: any) {
+            alert(e?.response?.data?.error || "Failed to send to manager");
+        }
+    };
+
+    const saveEdit = async () => {
+        if (!editQuotation) return;
+        setEditSaving(true);
+        try {
+            await quotationsAPI.update(editQuotation.id, editForm);
+            setEditQuotation(null);
+            fetchQuotations();
+        } catch (e: any) {
+            alert(e?.response?.data?.error || "Failed to save");
+        } finally { setEditSaving(false); }
     };
 
     const handleSearch = async () => {
@@ -196,18 +254,6 @@ export default function AdminDashboard() {
         }
     };
 
-    const sendCustomerNotif = async () => {
-        if (!notifMessage.trim()) return;
-        setSendingNotif(true);
-        try {
-            await notificationsAPI.create({ toRole: "ADMIN", message: notifMessage, vehicleNumber: notifVehicle });
-            setNotifMessage("");
-            setNotifVehicle("");
-            alert("Notification sent!");
-        } catch { alert("Failed to send"); }
-        finally { setSendingNotif(false); }
-    };
-
     const unreadCount = notifications.filter(n => !n.isRead).length;
 
     return (
@@ -217,7 +263,8 @@ export default function AdminDashboard() {
             <div className="flex gap-2 mb-6 flex-wrap">
                 {([
                     { key: "requests", label: "Employee Requests", icon: <FileText className="w-3.5 h-3.5" />, count: jobs.length },
-                    { key: "quotations", label: "Quotations", icon: <Edit3 className="w-3.5 h-3.5" />, count: quotations.length },
+                    { key: "quotations", label: "Quotations", icon: <Edit3 className="w-3.5 h-3.5" />, count: quotations.filter((q: Quotation) => ["DRAFT", "SENT_TO_MANAGER"].includes(q.status)).length },
+                    { key: "delivery", label: "Ready for Delivery", icon: <Truck className="w-3.5 h-3.5" />, count: quotations.filter((q: Quotation) => q.status === "FINALIZED").length || undefined },
                     { key: "notifications", label: "Notifications", icon: <Bell className="w-3.5 h-3.5" />, count: unreadCount },
                     { key: "search", label: "Search Records", icon: <Search className="w-3.5 h-3.5" />, count: undefined as number | undefined },
                     { key: "employees", label: "Employees", icon: <Users className="w-3.5 h-3.5" />, count: undefined as number | undefined },
@@ -281,8 +328,10 @@ export default function AdminDashboard() {
             {/* ── QUOTATIONS ── */}
             {tab === "quotations" && (
                 <div className="space-y-4 animate-fade-in">
-                    {quotations.length === 0 && <div className="card text-center py-10 text-slate-500">No quotations created yet</div>}
-                    {quotations.map(q => (
+                    {quotations.filter((q: Quotation) => ["DRAFT", "SENT_TO_MANAGER"].includes(q.status)).length === 0 && (
+                        <div className="card text-center py-10 text-slate-500">No quotations in progress</div>
+                    )}
+                    {quotations.filter((q: Quotation) => ["DRAFT", "SENT_TO_MANAGER"].includes(q.status)).map(q => (
                         <div key={q.id} className="card glass-hover">
                             <div className="flex items-start justify-between gap-4 flex-wrap">
                                 <div>
@@ -296,7 +345,7 @@ export default function AdminDashboard() {
                                     <p className="text-xs text-slate-500 mt-1">{q.items.length} line items</p>
                                 </div>
                                 <div className="flex gap-2 ml-auto flex-wrap">
-                                    <button onClick={() => setEditQuotation(q)} className="btn-secondary text-xs">
+                                    <button onClick={() => { setEditQuotation(q); setEditForm({ ownerName: q.ownerName || "", telephone: q.telephone || "", whatsappNumber: (q as any).whatsappNumber || "", vehicleType: q.vehicleType || "", color: q.color || "" }); }} className="btn-secondary text-xs">
                                         <Edit3 className="w-3.5 h-3.5 inline mr-1" />Edit
                                     </button>
                                     {q.status === "DRAFT" && (
@@ -308,6 +357,160 @@ export default function AdminDashboard() {
                             </div>
                         </div>
                     ))}
+                </div>
+            )}
+
+            {/* ── READY FOR DELIVERY ── */}
+            {tab === "delivery" && (
+                <div className="space-y-4 animate-fade-in">
+                    {/* Finalized — awaiting notification */}
+                    {quotations.filter((q: Quotation) => q.status === "FINALIZED").length === 0 &&
+                        quotations.filter((q: Quotation) => q.status === "CUSTOMER_NOTIFIED").length === 0 && (
+                            <div className="card text-center py-12">
+                                <Truck className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                                <p className="text-slate-500">No finalized jobs awaiting customer notification</p>
+                            </div>
+                        )}
+
+                    {/* Pending notification */}
+                    {quotations.filter((q: Quotation) => q.status === "FINALIZED").length > 0 && (
+                        <div>
+                            <h3 className="text-sm font-semibold text-amber-300 mb-3 flex items-center gap-2">
+                                <MessageCircle className="w-4 h-4" />
+                                Awaiting Customer Notification ({quotations.filter((q: Quotation) => q.status === "FINALIZED").length})
+                            </h3>
+                            <div className="space-y-3">
+                                {quotations.filter((q: Quotation) => q.status === "FINALIZED").map(q => (
+                                    <div key={q.id} className="card border-amber-500/20 glass-hover">
+                                        <div className="flex items-start justify-between gap-4 flex-wrap">
+                                            <div>
+                                                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                                    <span className="font-semibold text-white">{q.vehicleNumber}</span>
+                                                    <span className="badge badge-yellow">FINALIZED</span>
+                                                    <span className="badge badge-blue">{JOB_TYPE_LABELS[q.job.jobType]}</span>
+                                                    <span className="text-xs bg-blue-600/20 text-blue-300 px-2 py-0.5 rounded">Job #{q.job.jobNumber}</span>
+                                                </div>
+                                                <p className="text-sm text-slate-300 font-medium">{q.ownerName || "Unknown owner"}</p>
+                                                <p className="text-sm text-slate-400">{q.telephone ? `📞 ${q.telephone}` : "No phone number"}</p>
+                                                {q.whatsappNumber
+                                                    ? <p className="text-xs text-emerald-400 mt-0.5">💬 WhatsApp: {q.whatsappNumber}</p>
+                                                    : <p className="text-xs text-slate-600 mt-0.5">No WhatsApp number — notification not available</p>
+                                                }
+                                                {q.totalAmount && (
+                                                    <p className="text-emerald-400 font-semibold text-sm mt-1">
+                                                        Final Bill: Rs. {q.totalAmount.toFixed(2)}
+                                                    </p>
+                                                )}
+                                                <p className="text-xs text-slate-600 mt-1">Finalized: {formatDate(q.createdAt)}</p>
+                                            </div>
+                                            <div className="flex gap-2 ml-auto flex-wrap">
+                                                <button onClick={() => { setEditQuotation(q); setEditForm({ ownerName: q.ownerName || "", telephone: q.telephone || "", whatsappNumber: q.whatsappNumber || "", vehicleType: q.vehicleType || "", color: q.color || "" }); }} className="btn-secondary text-xs flex items-center gap-1.5">
+                                                    <Edit3 className="w-3.5 h-3.5" />Edit
+                                                </button>
+                                                {q.whatsappNumber ? (
+                                                    <button
+                                                        onClick={() => openWhatsApp(q)}
+                                                        disabled={!q.whatsappNumber}
+                                                        className="btn-success text-xs flex items-center gap-1.5"
+                                                        title={!q.whatsappNumber ? "No WhatsApp number on record" : "Open WhatsApp with pre-filled message"}
+                                                    >
+                                                        <MessageCircle className="w-3.5 h-3.5" />
+                                                        Notify via WhatsApp
+                                                    </button>
+                                                ) : (
+                                                    <span className="text-xs text-slate-500 italic self-center">No WhatsApp number</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Already notified */}
+                    {quotations.filter((q: Quotation) => q.status === "CUSTOMER_NOTIFIED").length > 0 && (
+                        <div>
+                            <h3 className="text-sm font-semibold text-emerald-300 mb-3 flex items-center gap-2">
+                                <CheckCircle className="w-4 h-4" />
+                                Customer Notified — Completed ({quotations.filter((q: Quotation) => q.status === "CUSTOMER_NOTIFIED").length})
+                            </h3>
+                            <div className="space-y-3">
+                                {quotations.filter((q: Quotation) => q.status === "CUSTOMER_NOTIFIED").map(q => (
+                                    <div key={q.id} className="card border-emerald-500/20 opacity-80">
+                                        <div className="flex items-start justify-between gap-4 flex-wrap">
+                                            <div>
+                                                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                                    <span className="font-semibold text-white">{q.vehicleNumber}</span>
+                                                    <span className="badge badge-green">CUSTOMER NOTIFIED</span>
+                                                    <span className="badge badge-blue">{JOB_TYPE_LABELS[q.job.jobType]}</span>
+                                                </div>
+                                                <p className="text-sm text-slate-300">{q.ownerName || "—"} · {q.telephone || "—"}</p>
+                                                {q.whatsappNumber && <p className="text-xs text-emerald-400">💬 {q.whatsappNumber}</p>}
+                                                {q.totalAmount && <p className="text-emerald-400 text-sm font-medium">Rs. {q.totalAmount.toFixed(2)}</p>}
+                                                {q.notifiedAt && (
+                                                    <p className="text-xs text-slate-500 mt-1 flex items-center gap-1">
+                                                        <Clock className="w-3 h-3" />Notified: {new Date(q.notifiedAt).toLocaleString("en-GB")}
+                                                    </p>
+                                                )}
+                                            </div>
+                                            <div className="flex gap-2 ml-auto">
+                                                <button onClick={() => { setEditQuotation(q); setEditForm({ ownerName: q.ownerName || "", telephone: q.telephone || "", whatsappNumber: q.whatsappNumber || "", vehicleType: q.vehicleType || "", color: q.color || "" }); }} className="btn-secondary text-xs flex items-center gap-1.5">
+                                                    <Edit3 className="w-3.5 h-3.5" />Edit
+                                                </button>
+                                                {q.whatsappNumber && (
+                                                    <button onClick={() => openWhatsApp(q)} className="btn-secondary text-xs flex items-center gap-1.5">
+                                                        <MessageCircle className="w-3.5 h-3.5" />Resend
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ── WHATSAPP PREVIEW / CONFIRM MODAL ── */}
+            {previewQ && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                    <div className="card max-w-md w-full animate-fade-in">
+                        <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-2">
+                                <MessageCircle className="w-5 h-5 text-emerald-400" />
+                                <h3 className="font-semibold">WhatsApp Opened</h3>
+                            </div>
+                            <button onClick={() => setPreviewQ(null)}><X className="w-5 h-5 text-slate-500" /></button>
+                        </div>
+
+                        <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-4 mb-4">
+                            <p className="text-xs text-emerald-400 font-medium mb-2">Message Preview</p>
+                            <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">
+                                {buildWhatsAppMessage(previewQ)}
+                            </p>
+                        </div>
+
+                        <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl px-4 py-3 mb-5 text-xs text-slate-400">
+                            WhatsApp has opened in a new tab with the message and recipient pre-filled.
+                            Click <strong className="text-white">Send</strong> in WhatsApp, then confirm below.
+                        </div>
+
+                        <div className="flex gap-3">
+                            <button onClick={() => setPreviewQ(null)} className="btn-secondary flex-1 text-sm">
+                                Cancel / Not Sent
+                            </button>
+                            <button
+                                onClick={() => handleMarkNotified(previewQ)}
+                                disabled={markingNotified === previewQ.id}
+                                className="btn-success flex-1 text-sm flex items-center justify-center gap-1.5"
+                            >
+                                <CheckCircle className="w-4 h-4" />
+                                {markingNotified === previewQ.id ? "Saving…" : "✓ Message Sent — Mark Complete"}
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -337,31 +540,7 @@ export default function AdminDashboard() {
                         ))}
                     </div>
 
-                    {/* Compose message to customer */}
-                    <div className="card border-emerald-500/20">
-                        <h3 className="text-sm font-semibold text-emerald-300 mb-4 flex items-center gap-2">
-                            <Send className="w-4 h-4" />Send Message to Customer
-                        </h3>
-                        <div className="space-y-3">
-                            <div>
-                                <label className="block text-xs text-slate-400 mb-1">Vehicle Number</label>
-                                <input value={notifVehicle} onChange={e => setNotifVehicle(e.target.value.toUpperCase())} placeholder="CAA-1234" className="input-field font-mono text-sm" />
-                            </div>
-                            <div>
-                                <label className="block text-xs text-slate-400 mb-1">Message</label>
-                                <textarea
-                                    value={notifMessage}
-                                    onChange={e => setNotifMessage(e.target.value)}
-                                    rows={4}
-                                    placeholder="Your vehicle is ready for pickup. We have completed the following services:&#10;- Engine oil replacement&#10;- Brake pad inspection&#10;Please visit us at your earliest convenience."
-                                    className="input-field resize-none text-sm"
-                                />
-                            </div>
-                            <button onClick={sendCustomerNotif} disabled={sendingNotif || !notifMessage.trim()} className="btn-success text-sm">
-                                <Send className="w-3.5 h-3.5 inline mr-1.5" />Send to Customer
-                            </button>
-                        </div>
-                    </div>
+
                 </div>
             )}
 
@@ -778,17 +957,30 @@ export default function AdminDashboard() {
 
                         {/* Vehicle details */}
                         <div className="grid grid-cols-2 gap-3 mb-4">
-                            {[{ k: "vehicleNumber", label: "Vehicle No. *" }, { k: "ownerName", label: "Owner Name" }, { k: "address", label: "Address" }, { k: "telephone", label: "Telephone" }, { k: "vehicleType", label: "Vehicle Type" }, { k: "color", label: "Color" }].map(({ k, label }) => (
+                            {[{ k: "vehicleNumber", label: "Vehicle No. *", required: false }, { k: "ownerName", label: "Owner Name", required: false }, { k: "address", label: "Address", required: false }, { k: "telephone", label: "Telephone *", required: true }, { k: "vehicleType", label: "Vehicle Type", required: false }, { k: "color", label: "Color", required: false }].map(({ k, label, required }) => (
                                 <div key={k} className={k === "address" ? "col-span-2" : ""}>
                                     <label className="block text-xs text-slate-400 mb-1">{label}</label>
                                     <input
                                         value={qForm[k as keyof typeof qForm]}
                                         onChange={e => setQForm(f => ({ ...f, [k]: e.target.value }))}
-                                        className="input-field text-sm"
+                                        className={`input-field text-sm ${required && !qForm[k as keyof typeof qForm] ? "border-red-500/50" : ""}`}
                                         readOnly={k === "vehicleNumber"}
+                                        placeholder={k === "telephone" ? "e.g. 0771234567 (required)" : ""}
                                     />
                                 </div>
                             ))}
+                            <div className="col-span-2">
+                                <label className="block text-xs text-slate-400 mb-1">
+                                    WhatsApp Number
+                                    <span className="ml-2 text-[10px] text-emerald-400 font-normal">— if provided, admin can send WhatsApp notification when job is ready</span>
+                                </label>
+                                <input
+                                    value={qForm.whatsappNumber}
+                                    onChange={e => setQForm(f => ({ ...f, whatsappNumber: e.target.value }))}
+                                    className="input-field text-sm"
+                                    placeholder="e.g. 0766479884 (optional)"
+                                />
+                            </div>
                             {quotationJob.jobType === "ACCIDENT_RECOVERY" && (
                                 <div className="col-span-2">
                                     <label className="block text-xs text-slate-400 mb-1">Insurance Company</label>
@@ -821,9 +1013,14 @@ export default function AdminDashboard() {
                             </div>
                         </div>
 
+                        {!qForm.telephone.trim() && (
+                            <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 text-red-400 text-xs mb-3">
+                                Telephone number is required before creating a quotation.
+                            </div>
+                        )}
                         <div className="flex gap-3">
                             <button onClick={() => setShowQuotationForm(false)} className="btn-secondary flex-1">Cancel</button>
-                            <button onClick={submitQuotation} disabled={qLoading} className="btn-primary flex-1">
+                            <button onClick={submitQuotation} disabled={qLoading || !qForm.telephone.trim()} className="btn-primary flex-1">
                                 {qLoading ? "Creating…" : "Add Quotation"}
                             </button>
                         </div>
@@ -839,24 +1036,40 @@ export default function AdminDashboard() {
                             <h3 className="font-semibold">Edit Quotation — {editQuotation.vehicleNumber}</h3>
                             <button onClick={() => setEditQuotation(null)}><X className="w-5 h-5 text-slate-500" /></button>
                         </div>
-                        <p className="text-sm text-slate-400 mb-4">You can update customer details and line items. Employee notes cannot be changed.</p>
+                        <p className="text-sm text-slate-400 mb-4">Update customer details. Telephone is required to send to manager.</p>
                         <div className="grid grid-cols-2 gap-3 mb-4">
-                            {[["ownerName", "Owner Name"], ["telephone", "Telephone"], ["vehicleType", "Vehicle Type"], ["color", "Color"]].map(([k, label]) => (
-                                <div key={k}>
-                                    <label className="block text-xs text-slate-400 mb-1">{label}</label>
-                                    <input
-                                        defaultValue={(editQuotation as unknown as Record<string, unknown>)[k] as string || ""}
-                                        onBlur={e => { (editQuotation as unknown as Record<string, unknown>)[k] = e.target.value; }}
-                                        className="input-field text-sm"
-                                    />
-                                </div>
-                            ))}
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">Owner Name</label>
+                                <input value={editForm.ownerName} onChange={e => setEditForm(f => ({ ...f, ownerName: e.target.value }))} className="input-field text-sm" />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">Telephone *</label>
+                                <input value={editForm.telephone} onChange={e => setEditForm(f => ({ ...f, telephone: e.target.value }))} className="input-field text-sm" placeholder="e.g. 0771234567" />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">Vehicle Type</label>
+                                <input value={editForm.vehicleType} onChange={e => setEditForm(f => ({ ...f, vehicleType: e.target.value }))} className="input-field text-sm" />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">Color</label>
+                                <input value={editForm.color} onChange={e => setEditForm(f => ({ ...f, color: e.target.value }))} className="input-field text-sm" />
+                            </div>
+                            <div className="col-span-2">
+                                <label className="block text-xs text-slate-400 mb-1">
+                                    WhatsApp Number
+                                    <span className="ml-2 text-[10px] text-emerald-400 font-normal">— message will be sent to this number when job is ready</span>
+                                </label>
+                                <input value={editForm.whatsappNumber} onChange={e => setEditForm(f => ({ ...f, whatsappNumber: e.target.value }))} className="input-field text-sm" placeholder="e.g. 0766479884 (optional)" />
+                            </div>
                         </div>
                         <div className="flex gap-3">
-                            <button onClick={() => setEditQuotation(null)} className="btn-secondary flex-1">Close</button>
+                            <button onClick={() => setEditQuotation(null)} className="btn-secondary flex-1">Cancel</button>
+                            <button onClick={saveEdit} disabled={editSaving} className="btn-secondary flex-1">
+                                {editSaving ? "Saving…" : "Save Changes"}
+                            </button>
                             {editQuotation.status === "DRAFT" && (
-                                <button onClick={async () => { await sendToManager(editQuotation.id); setEditQuotation(null); fetchQuotations(); }} className="btn-primary flex-1">
-                                    <Send className="w-3.5 h-3.5 inline mr-1" />Send to Manager
+                                <button onClick={async () => { await saveEdit(); await sendToManager(editQuotation.id); }} disabled={editSaving || !editForm.telephone.trim()} className="btn-primary flex-1">
+                                    <Send className="w-3.5 h-3.5 inline mr-1" />Save & Send to Manager
                                 </button>
                             )}
                         </div>

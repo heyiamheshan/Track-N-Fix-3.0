@@ -58,6 +58,7 @@ export const quotationsAPI = {
     update: (id: string, data: object) => api.put(`/quotations/${id}`, data),
     send: (id: string) => api.put(`/quotations/${id}/send`),
     finalize: (id: string, data: object) => api.put(`/quotations/${id}/finalize`, data),
+    markNotified: (id: string) => api.patch(`/quotations/${id}/notify`),
 };
 
 // Vehicles

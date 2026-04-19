@@ -22,8 +22,19 @@ import prisma from './lib/prisma';
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+const allowedOrigins = [
+    'http://localhost:3000',
+    process.env.FRONTEND_URL,
+].filter(Boolean) as string[];
+
 app.use(cors({
-    origin: 'http://localhost:3000',
+    origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true,
 }));
 
@@ -49,6 +60,10 @@ app.use('/api/voice', voiceRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/analytics', analyticsRoutes);
+
+app.get('/', (_req, res) => {
+    res.send('TrackNFix Backend is Live and Running!');
+});
 
 app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', message: 'TrackNFix API running', timestamp: new Date().toISOString() });

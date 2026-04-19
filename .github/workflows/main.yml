@@ -3,8 +3,6 @@ name: TrackNFix CI/CD Pipeline
 on:
     push:
         branches: [main]
-    pull_request:
-        branches: [main]
 
 jobs:
     build-and-test:
@@ -52,3 +50,32 @@ jobs:
               env:
                   DATABASE_URL: "postgresql://postgres:password@localhost:5432/tracknfix_test"
                   JWT_SECRET: "test_secret"
+
+    deploy:
+        needs: build-and-test
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write
+            contents: read
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Configure AWS Credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+                  aws-region: ap-south-1
+
+            - name: Create Deployment Package
+              run: |
+                  cd backend
+                  zip -r ../deploy.zip . -x "*.git*" "node_modules/*"
+
+            - name: Deploy to Elastic Beanstalk
+              uses: aws-actions/aws-elasticbeanstalk-deploy@v2
+              with:
+                  application_name: tracknfix-backend
+                  environment_name: Tracknfix-backend-env
+                  version_label: "deploy-${{ github.sha }}"
+                  region: ap-south-1
+                  deployment_package: deploy.zip

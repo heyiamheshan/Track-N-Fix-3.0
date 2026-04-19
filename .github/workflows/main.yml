@@ -1,91 +1,85 @@
 name: TrackNFix CI/CD Pipeline
 
 on:
-    push:
-        branches: [main]
+  push:
+    branches: [ main ]
 
 jobs:
-    build-and-test:
-        runs-on: ubuntu-latest
+  build-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: tracknfix_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Backend Dependencies
+        run: |
+          cd backend
+          npm install
+      - name: Run Database Migrations (Test DB)
+        run: |
+          cd backend
+          npx prisma migrate dev --name init
+        env:
+          DATABASE_URL: "postgresql://postgres:password@localhost:5432/tracknfix_test"
+      - name: Run Unit & Integration Tests
+        run: |
+          cd backend
+          npm test
+        env:
+          DATABASE_URL: "postgresql://postgres:password@localhost:5432/tracknfix_test"
+          JWT_SECRET: "test_secret"
 
-        services:
-            postgres:
-                image: postgres:15-alpine
-                env:
-                    POSTGRES_USER: postgres
-                    POSTGRES_PASSWORD: password
-                    POSTGRES_DB: tracknfix_test
-                ports:
-                    - 5432:5432
-                options: >-
-                    --health-cmd pg_isready
-                    --health-interval 10s
-                    --health-timeout 5s
-                    --health-retries 5
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
 
-        steps:
-            - uses: actions/checkout@v4
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-south-1
 
-            - name: Setup Node.js
-              uses: actions/setup-node@v4
-              with:
-                  node-version: "20"
+      - name: Create Deployment Package
+        run: |
+          cd backend
+          zip -r ../deploy.zip . -x "*.git*" "node_modules/*"
 
-            - name: Install Backend Dependencies
-              run: |
-                  cd backend
-                  npm install
-
-            - name: Run Database Migrations (Test DB)
-              run: |
-                  cd backend
-                  npx prisma migrate dev --name init
-              env:
-                  DATABASE_URL: "postgresql://postgres:password@localhost:5432/tracknfix_test"
-
-            - name: Run Unit & Integration Tests
-              run: |
-                  cd backend
-                  npm test
-              env:
-                  DATABASE_URL: "postgresql://postgres:password@localhost:5432/tracknfix_test"
-                  JWT_SECRET: "test_secret"
-
-    deploy:
-        needs: build-and-test
-        runs-on: ubuntu-latest
-        permissions:
-            id-token: write
-            contents: read
-        steps:
-            - uses: actions/checkout@v4
-
-            - name: Configure AWS Credentials
-              uses: aws-actions/configure-aws-credentials@v4
-              with:
-                  role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-                  aws-region: ap-south-1
-
-            - name: Create Deployment Package
-              run: |
-                  cd backend
-                  zip -r ../deploy.zip . -x "*.git*" "node_modules/*"
-
-            - name: Deploy via AWS CLI
-              run: |
-                  # 1. Get the S3 bucket EB uses
-                  BUCKET=$(aws elasticbeanstalk create-storage-location --query S3Bucket --output text)
-                  
-                  # 2. Upload your zip to S3
-                  aws s3 cp deploy.zip s3://$BUCKET/tracknfix-deploy-${{ github.sha }}.zip
-                  
-                  # 3. Tell EB about the new version
-                  aws elasticbeanstalk create-application-version \
-                    --application-name tracknfix-backend \
-                    --version-label "deploy-${{ github.sha }}" \
-                    --source-bundle S3Bucket=$BUCKET,S3Key=tracknfix-deploy-${{ github.sha }}.zip
-                  
-                  # 4. Deploy it!
-                  aws elasticbeanstalk update-environment \
-                    --environment-name Tracknfix-backend-env \
-                    --version-label "deploy-${{ github.sha }}"
+      - name: Deploy to AWS (Direct CLI)
+        run: |
+          # 1. Get the S3 bucket created by EB
+          BUCKET=$(aws elasticbeanstalk create-storage-location --query S3Bucket --output text)
+          
+          # 2. Upload the zip
+          aws s3 cp deploy.zip s3://$BUCKET/tracknfix-deploy-${{ github.sha }}.zip
+          
+          # 3. Create new application version
+          aws elasticbeanstalk create-application-version \
+            --application-name tracknfix-backend \
+            --version-label "deploy-${{ github.sha }}" \
+            --source-bundle S3Bucket=$BUCKET,S3Key=tracknfix-deploy-${{ github.sha }}.zip
+          
+          # 4. Tell EB to deploy it
+          aws elasticbeanstalk update-environment \
+            --environment-name Tracknfix-backend-env \
+            --version-label "deploy-${{ github.sha }}"

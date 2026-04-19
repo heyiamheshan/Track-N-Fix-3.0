@@ -72,7 +72,7 @@ jobs:
                   zip -r ../deploy.zip . -x "*.git*" "node_modules/*"
 
             - name: Deploy to Elastic Beanstalk
-              uses: aws-actions/aws-elasticbeanstalk-deploy@v2
+              uses: aws-actions/aws-elasticbeanstalk-deploy@v1
               with:
                   application_name: tracknfix-backend
                   environment_name: Tracknfix-backend-env

@@ -310,7 +310,7 @@ export default function AIAssistant({ context = {}, onVehicleHistory, onPrintRep
                                     <p className="whitespace-pre-wrap">{msg.text}</p>
 
                                     {/* Quick-action buttons for actionable intents */}
-                                    {msg.role === "assistant" && msg.intent === "vehicle_history" && msg.data && msg.params?.vehicleNumber && (
+                                    {msg.role === "assistant" && msg.intent === "vehicle_history" && !!msg.data && msg.params?.vehicleNumber && (
                                         <div className="mt-2 flex gap-1.5 flex-wrap">
                                             <button
                                                 onClick={() => onVehicleHistory?.(msg.params!.vehicleNumber!, msg.data)}
@@ -327,7 +327,7 @@ export default function AIAssistant({ context = {}, onVehicleHistory, onPrintRep
                                         </div>
                                     )}
 
-                                    {msg.role === "assistant" && msg.intent === "print_report" && msg.data && msg.params?.vehicleNumber && (
+                                    {msg.role === "assistant" && msg.intent === "print_report" && !!msg.data && msg.params?.vehicleNumber && (
                                         <div className="mt-2">
                                             <button
                                                 onClick={() => onPrintReport?.(msg.params!.vehicleNumber!, msg.data)}

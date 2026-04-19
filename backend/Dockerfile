@@ -1,26 +1,27 @@
-# Use the official Node.js 20 Alpine image for a small footprint
+# Use Node 20 Alpine
 FROM node:20-alpine
 
-# Set the working directory
+# Install OpenSSL 1.1 (Required for Prisma on Alpine)
+RUN apk add --no-cache openssl
+
+# Set working directory
 WORKDIR /app
 
-# Copy package files first to leverage Docker's cache
+# Copy package files and install dependencies
 COPY package*.json ./
-
-# Install dependencies
 RUN npm install
 
-# Copy the rest of your backend source code
+# Copy the rest of the code
 COPY . .
 
-# Generate the Prisma client (Crucial for your DB handshake)
+# Generate Prisma Client
 RUN npx prisma generate
 
-# Build your TypeScript code
+# Build the project (if using TypeScript)
 RUN npm run build
 
-# The port your Express server runs on
+# Expose the port EB is expecting
 EXPOSE 5001
 
-# Command to run the app
+# Start the application
 CMD ["npm", "start"]

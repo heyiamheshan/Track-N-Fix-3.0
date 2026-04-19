@@ -1,0 +1,8 @@
+node_modules
+.env
+dist
+uploads
+*.test.ts
+find_users.ts
+update_pass.ts
+verify_cc678.ts

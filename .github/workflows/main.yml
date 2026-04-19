@@ -71,18 +71,21 @@ jobs:
                   cd backend
                   zip -r ../deploy.zip . -x "*.git*" "node_modules/*"
 
-            - name: Deploy to Elastic Beanstalk
+            - name: Deploy via AWS CLI
               run: |
+                  # 1. Get the S3 bucket EB uses
                   BUCKET=$(aws elasticbeanstalk create-storage-location --query S3Bucket --output text)
-                  aws s3 cp deploy.zip s3://$BUCKET/tracknfix-backend/deploy-${{ github.sha }}.zip
+                  
+                  # 2. Upload your zip to S3
+                  aws s3 cp deploy.zip s3://$BUCKET/tracknfix-deploy-${{ github.sha }}.zip
+                  
+                  # 3. Tell EB about the new version
                   aws elasticbeanstalk create-application-version \
                     --application-name tracknfix-backend \
                     --version-label "deploy-${{ github.sha }}" \
-                    --source-bundle S3Bucket=$BUCKET,S3Key=tracknfix-backend/deploy-${{ github.sha }}.zip \
-                    --region ap-south-1
+                    --source-bundle S3Bucket=$BUCKET,S3Key=tracknfix-deploy-${{ github.sha }}.zip
+                  
+                  # 4. Deploy it!
                   aws elasticbeanstalk update-environment \
                     --environment-name Tracknfix-backend-env \
-                    --version-label "deploy-${{ github.sha }}" \
-                    --region ap-south-1
-              env:
-                  AWS_DEFAULT_REGION: ap-south-1
+                    --version-label "deploy-${{ github.sha }}"

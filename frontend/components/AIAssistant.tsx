@@ -1,6 +1,6 @@
 "use client";
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Mic, MicOff, X, Loader2, Volume2, Bot, ChevronDown, Printer, Car, Package, TrendingUp, Users } from "lucide-react";
+import { Mic, MicOff, X, Loader2, Volume2, ChevronDown, Printer, Car, Package, TrendingUp, Users } from "lucide-react";
 import { voiceAPI } from "@/lib/api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -249,7 +249,7 @@ export default function AIAssistant({ context = {}, onVehicleHistory, onPrintRep
                 }`}
                 title={open ? "Close assistant" : "Open AI Assistant"}
             >
-                {open ? <ChevronDown className="w-6 h-6" /> : <Bot className="w-6 h-6" />}
+                {open ? <ChevronDown className="w-6 h-6" /> : <img src="/logo.jpg" alt="TrackNFix Logo" className="w-6 h-6 rounded-full object-cover" />}
                 {/* Pulse ring when not open */}
                 {!open && (
                     <span className="absolute inset-0 rounded-full border-2 border-blue-400 animate-ping opacity-30 pointer-events-none" />
@@ -264,7 +264,7 @@ export default function AIAssistant({ context = {}, onVehicleHistory, onPrintRep
                     <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-blue-600/20 to-indigo-600/20 border-b border-slate-700/60">
                         <div className="flex items-center gap-2">
                             <div className={`w-7 h-7 rounded-full flex items-center justify-center ${speaking ? "bg-blue-500 animate-pulse" : "bg-blue-600"}`}>
-                                <Bot className="w-4 h-4 text-white" />
+                                <img src="/logo.jpg" alt="TrackNFix Logo" className="w-4 h-4 rounded-full object-cover" />
                             </div>
                             <div>
                                 <p className="text-sm font-semibold text-white leading-none">TrackNFix AI</p>
@@ -282,7 +282,7 @@ export default function AIAssistant({ context = {}, onVehicleHistory, onPrintRep
                     <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0 scrollbar-thin">
                         {messages.length === 0 && (
                             <div className="text-center py-8 space-y-2">
-                                <Bot className="w-10 h-10 text-slate-600 mx-auto" />
+                                <img src="/logo.jpg" alt="TrackNFix Logo" className="w-10 h-10 rounded-full object-cover mx-auto" />
                                 <p className="text-slate-500 text-sm font-medium">How can I help?</p>
                                 <div className="text-xs text-slate-600 space-y-1 mt-3">
                                     <p>"Show history for WP-ABC-1234"</p>

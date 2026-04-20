@@ -172,7 +172,17 @@ export default function AdminDashboard() {
             const res = await employeesAPI.list();
             setEmployees(res.data);
         } catch (err: any) {
-            setEmpError(err?.response?.data?.error || "Failed to create employee");
+            // Handle Zod validation errors (array of error objects)
+            if (err?.response?.data?.error && Array.isArray(err.response.data.error)) {
+                const zodErrors = err.response.data.error;
+                const errorMessages = zodErrors.map((error: any) => {
+                    const field = error.path?.[0] || 'field';
+                    return `${field}: ${error.message}`;
+                });
+                setEmpError(errorMessages.join(', '));
+            } else {
+                setEmpError(err?.response?.data?.error || "Failed to create employee");
+            }
         } finally {
             setEmpSubmitting(false);
         }

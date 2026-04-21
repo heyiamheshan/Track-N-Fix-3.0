@@ -25,6 +25,7 @@ const PORT = process.env.PORT || 5000;
 const allowedOrigins = [
     'http://localhost:3000',
     'http://localhost:3001',
+    'https://main.d1z3vjzwxx6p7j.amplifyapp.com',
     process.env.FRONTEND_URL,
 ].filter(Boolean) as string[];
 

@@ -1,3 +1,26 @@
+/**
+ * quotations.ts — Quotation Routes
+ *
+ * Manages the full quotation workflow for vehicle repair/service jobs:
+ *
+ *   POST   /api/quotations            – Admin/Manager creates a new quotation
+ *   GET    /api/quotations            – List quotations (role-filtered)
+ *   GET    /api/quotations/:id        – Get a single quotation with all related data
+ *   PUT    /api/quotations/:id        – Edit quotation details and line items
+ *   PUT    /api/quotations/:id/send   – Admin sends quotation to manager for review
+ *   PUT    /api/quotations/:id/finalize – Manager finalises quotation (deducts inventory)
+ *   PATCH  /api/quotations/:id/notify – Admin marks customer as notified via WhatsApp
+ *
+ * Quotation status flow:
+ *   DRAFT → SENT_TO_MANAGER → FINALIZED → CUSTOMER_NOTIFIED
+ *
+ * Design notes:
+ *   - Finalization runs inside a Prisma $transaction to ensure inventory deductions
+ *     and quotation status updates are atomic (all succeed or all roll back).
+ *   - When no jobId is supplied, a proxy job is auto-created so every quotation
+ *     is always linked to a job card.
+ */
+
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import prisma from '../lib/prisma';
@@ -5,6 +28,13 @@ import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
+// ── Input Validation Schema ───────────────────────────────────────────────────
+
+/**
+ * Validates the request body when creating or updating a quotation.
+ * telephone is required because it's needed before sending to manager.
+ * items is an optional array of line items (parts + labour).
+ */
 const createQuotationSchema = z.object({
     jobId: z.string().optional(),
     vehicleNumber: z.string().min(1),
@@ -24,18 +54,30 @@ const createQuotationSchema = z.object({
     })).optional(),
 });
 
-// POST /api/quotations - admin/manager creates quotation
+// ── POST /api/quotations ──────────────────────────────────────────────────────
+/**
+ * Creates a new quotation.
+ *
+ * Steps:
+ *  1. Find or create the vehicle record.
+ *  2. Update vehicle owner/contact details.
+ *  3. If no jobId is provided, create a proxy job (SERVICE type) so the quotation
+ *     is always linked to a job card (required for the ledger/analytics).
+ *  4. Create the quotation with initial status DRAFT (admin) or SENT_TO_MANAGER (manager).
+ *  5. Bulk-insert line items if provided.
+ *  6. If linked to an existing job, mark that job as QUOTED.
+ */
 router.post('/', authenticate, requireRole('ADMIN', 'MANAGER'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const data = createQuotationSchema.parse(req.body);
 
-        // Get vehicle
+        // Find or auto-create vehicle by registration number
         let vehicle = await prisma.vehicle.findUnique({ where: { vehicleNumber: data.vehicleNumber } });
         if (!vehicle) {
             vehicle = await prisma.vehicle.create({ data: { vehicleNumber: data.vehicleNumber } });
         }
 
-        // Update vehicle details
+        // Enrich vehicle record with customer contact details from the quotation form
         vehicle = await prisma.vehicle.update({
             where: { id: vehicle.id },
             data: {
@@ -48,6 +90,7 @@ router.post('/', authenticate, requireRole('ADMIN', 'MANAGER'), async (req: Auth
             },
         });
 
+        // Auto-create a proxy job if the quotation is not linked to an existing job card
         let jobId = data.jobId;
         if (!jobId) {
             const proxyJob = await prisma.job.create({
@@ -62,6 +105,7 @@ router.post('/', authenticate, requireRole('ADMIN', 'MANAGER'), async (req: Auth
             jobId = proxyJob.id;
         }
 
+        // Managers create quotations that skip the DRAFT stage and go straight to review
         const quotation = await prisma.quotation.create({
             data: {
                 jobId: jobId,
@@ -81,21 +125,26 @@ router.post('/', authenticate, requireRole('ADMIN', 'MANAGER'), async (req: Auth
             include: { job: { include: { images: true } }, items: true },
         });
 
-        // Create items if provided
+        // Bulk-insert line items if any were included in the request
         if (data.items && data.items.length > 0) {
             await prisma.quotationItem.createMany({
                 data: data.items.map(item => ({ ...item, quotationId: quotation.id })),
             });
         }
 
-        // Update job status to QUOTED if it existed
+        // Mark the linked job as QUOTED so it moves to the next stage in the work queue
         if (data.jobId) {
             await prisma.job.update({ where: { id: data.jobId }, data: { status: 'QUOTED' } });
         }
 
+        // Re-fetch with full relations for the response payload
         const full = await prisma.quotation.findUnique({
             where: { id: quotation.id },
-            include: { job: { include: { images: true, employee: { select: { id: true, name: true } } } }, vehicle: true, items: true },
+            include: {
+                job: { include: { images: true, employee: { select: { id: true, name: true } } } },
+                vehicle: true,
+                items: true,
+            },
         });
 
         res.status(201).json(full);
@@ -106,16 +155,23 @@ router.post('/', authenticate, requireRole('ADMIN', 'MANAGER'), async (req: Auth
     }
 });
 
-// GET /api/quotations - list quotations
+// ── GET /api/quotations ───────────────────────────────────────────────────────
+/**
+ * Returns a role-filtered list of quotations:
+ *   MANAGER – Only quotations in SENT_TO_MANAGER, FINALIZED, or CUSTOMER_NOTIFIED status
+ *   ADMIN   – All quotations (full visibility for management and customer notification)
+ */
 router.get('/', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         let where: any = {};
         if (req.user!.role === 'MANAGER') {
+            // Managers only see quotations that have been sent to them or are in later stages
             where = { status: { in: ['SENT_TO_MANAGER', 'FINALIZED', 'CUSTOMER_NOTIFIED'] } };
         } else if (req.user!.role === 'ADMIN') {
             // Admin sees DRAFT/SENT_TO_MANAGER for their work queue + FINALIZED/CUSTOMER_NOTIFIED for delivery management
             where = {};
         }
+
         const quotations = await prisma.quotation.findMany({
             where,
             include: {
@@ -127,6 +183,7 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response): Promise<v
             },
             orderBy: { createdAt: 'desc' },
         });
+
         res.json(quotations);
     } catch (error) {
         console.error(error);
@@ -134,7 +191,12 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response): Promise<v
     }
 });
 
-// GET /api/quotations/:id - get single quotation
+// ── GET /api/quotations/:id ───────────────────────────────────────────────────
+/**
+ * Returns a single quotation with all related data:
+ * job (including images and employee), vehicle, line items, and the admin/manager
+ * who handled each stage.
+ */
 router.get('/:id', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const quotation = await prisma.quotation.findUnique({
@@ -155,24 +217,35 @@ router.get('/:id', authenticate, async (req: AuthRequest, res: Response): Promis
     }
 });
 
-// PUT /api/quotations/:id - edit quotation
+// ── PUT /api/quotations/:id ───────────────────────────────────────────────────
+/**
+ * Edits a quotation's details and/or replaces its line items.
+ * Uses a dynamic update object (updatedData) so only provided fields are changed —
+ * undefined fields are not written, preventing accidental overwrites.
+ * Items are replaced atomically: old items are deleted, new ones bulk-inserted.
+ */
 router.put('/:id', authenticate, requireRole('ADMIN', 'MANAGER'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-        const { ownerName, address, telephone, whatsappNumber, vehicleType, color, insuranceCompany, jobDetails, items, totalAmount } = req.body;
+        const {
+            ownerName, address, telephone, whatsappNumber, vehicleType,
+            color, insuranceCompany, jobDetails, items, totalAmount
+        } = req.body;
 
+        // Build a partial update object — only include fields that were sent in the request
         const updatedData: Record<string, unknown> = {};
-        if (ownerName !== undefined) updatedData.ownerName = ownerName;
-        if (address !== undefined) updatedData.address = address;
-        if (telephone !== undefined) updatedData.telephone = telephone;
-        if (whatsappNumber !== undefined) updatedData.whatsappNumber = whatsappNumber;
-        if (vehicleType !== undefined) updatedData.vehicleType = vehicleType;
-        if (color !== undefined) updatedData.color = color;
+        if (ownerName !== undefined)       updatedData.ownerName = ownerName;
+        if (address !== undefined)         updatedData.address = address;
+        if (telephone !== undefined)       updatedData.telephone = telephone;
+        if (whatsappNumber !== undefined)  updatedData.whatsappNumber = whatsappNumber;
+        if (vehicleType !== undefined)     updatedData.vehicleType = vehicleType;
+        if (color !== undefined)           updatedData.color = color;
         if (insuranceCompany !== undefined) updatedData.insuranceCompany = insuranceCompany;
-        if (jobDetails !== undefined) updatedData.jobDetails = jobDetails;
-        if (totalAmount !== undefined) updatedData.totalAmount = totalAmount;
+        if (jobDetails !== undefined)      updatedData.jobDetails = jobDetails;
+        if (totalAmount !== undefined)     updatedData.totalAmount = totalAmount;
 
         await prisma.quotation.update({ where: { id: req.params.id }, data: updatedData });
 
+        // Replace all line items if an items array was provided (full replacement strategy)
         if (items && Array.isArray(items)) {
             await prisma.quotationItem.deleteMany({ where: { quotationId: req.params.id } });
             if (items.length > 0) {
@@ -185,10 +258,12 @@ router.put('/:id', authenticate, requireRole('ADMIN', 'MANAGER'), async (req: Au
             }
         }
 
+        // Return the full updated quotation including images and vehicle
         const full = await prisma.quotation.findUnique({
             where: { id: req.params.id },
             include: { job: { include: { images: true } }, vehicle: true, items: true },
         });
+
         res.json(full);
     } catch (error) {
         console.error(error);
@@ -196,13 +271,22 @@ router.put('/:id', authenticate, requireRole('ADMIN', 'MANAGER'), async (req: Au
     }
 });
 
-// PUT /api/quotations/:id/send - admin sends to manager
+// ── PUT /api/quotations/:id/send ──────────────────────────────────────────────
+/**
+ * Admin sends a DRAFT quotation to the manager for pricing review.
+ * Validates that a telephone number exists before allowing submission
+ * (manager needs it to contact the customer).
+ */
 router.put('/:id/send', authenticate, requireRole('ADMIN'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const existing = await prisma.quotation.findUnique({ where: { id: req.params.id } });
         if (!existing) { res.status(404).json({ error: 'Quotation not found' }); return; }
+
+        // Business rule: telephone is mandatory before sending to manager
         if (!existing.telephone || existing.telephone.trim() === '') {
-            res.status(400).json({ error: 'A telephone number is required before sending to the manager. Please edit the quotation and add the customer telephone number.' });
+            res.status(400).json({
+                error: 'A telephone number is required before sending to the manager. Please edit the quotation and add the customer telephone number.'
+            });
             return;
         }
 
@@ -211,6 +295,7 @@ router.put('/:id/send', authenticate, requireRole('ADMIN'), async (req: AuthRequ
             data: { status: 'SENT_TO_MANAGER' },
             include: { job: true, vehicle: true, items: true },
         });
+
         res.json(quotation);
     } catch (error) {
         console.error(error);
@@ -218,13 +303,35 @@ router.put('/:id/send', authenticate, requireRole('ADMIN'), async (req: AuthRequ
     }
 });
 
-// PUT /api/quotations/:id/finalize - manager finalizes
+// ── PUT /api/quotations/:id/finalize ─────────────────────────────────────────
+/**
+ * Manager finalises the quotation after agreeing on prices with the customer.
+ *
+ * This endpoint performs all writes inside a single Prisma $transaction to guarantee:
+ *  1. Line items are replaced with the final agreed amounts.
+ *  2. Quotation status is set to FINALIZED with the manager's ID and total amount.
+ *  3. Associated job is marked as FINALIZED.
+ *  4. Inventory quantities are decremented for any spare parts used.
+ *  5. Stock ledger entries are created for each deduction (audit trail).
+ *  6. Admin is notified that the quotation is ready for customer notification.
+ *
+ * Stock availability is verified BEFORE entering the transaction to avoid
+ * partial rollbacks due to insufficient stock.
+ */
 router.put('/:id/finalize', authenticate, requireRole('MANAGER'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const { items, totalAmount } = req.body;
 
-        // Collect inventory deductions needed
-        type ItemInput = { description: string; partReplaced?: string; price: number; laborCost: number; sparePartId?: string; quantity?: number };
+        // Collect all spare part deductions needed for this quotation
+        type ItemInput = {
+            description: string;
+            partReplaced?: string;
+            price: number;
+            laborCost: number;
+            sparePartId?: string;
+            quantity?: number;
+        };
+
         const inventoryItems: { sparePartId: string; qty: number }[] = [];
         if (items && Array.isArray(items)) {
             for (const item of items as ItemInput[]) {
@@ -234,22 +341,28 @@ router.put('/:id/finalize', authenticate, requireRole('MANAGER'), async (req: Au
             }
         }
 
-        // Verify sufficient stock before committing
+        // Pre-transaction stock check — fail fast with a clear error message if stock is insufficient
         for (const { sparePartId, qty } of inventoryItems) {
             const part = await prisma.sparePart.findUnique({ where: { id: sparePartId } });
             if (!part) { res.status(400).json({ error: `Spare part ${sparePartId} not found` }); return; }
             if (part.quantity < qty) {
-                res.status(409).json({ error: `Insufficient stock for "${part.name}". Available: ${part.quantity}, Required: ${qty}` });
+                res.status(409).json({
+                    error: `Insufficient stock for "${part.name}". Available: ${part.quantity}, Required: ${qty}`
+                });
                 return;
             }
         }
 
-        // Fetch job for ledger reference
-        const quotationRef = await prisma.quotation.findUnique({ where: { id: req.params.id }, include: { job: true } });
+        // Fetch quotation reference data for ledger entries (job number and vehicle number)
+        const quotationRef = await prisma.quotation.findUnique({
+            where: { id: req.params.id },
+            include: { job: true }
+        });
         if (!quotationRef) { res.status(404).json({ error: 'Quotation not found' }); return; }
 
-        // Atomic transaction: update items, finalize quotation, deduct inventory
+        // Atomic transaction: all writes succeed together or none are applied
         await prisma.$transaction(async (tx) => {
+            // Replace line items with the final agreed values
             if (items && Array.isArray(items)) {
                 await tx.quotationItem.deleteMany({ where: { quotationId: req.params.id } });
                 if (items.length > 0) {
@@ -267,14 +380,19 @@ router.put('/:id/finalize', authenticate, requireRole('MANAGER'), async (req: Au
                 }
             }
 
+            // Finalise the quotation record with manager info and total amount
             await tx.quotation.update({
                 where: { id: req.params.id },
                 data: { status: 'FINALIZED', managerId: req.user!.id, totalAmount },
             });
 
-            await tx.job.update({ where: { id: quotationRef.jobId }, data: { status: 'FINALIZED' } });
+            // Progress the associated job to FINALIZED status
+            await tx.job.update({
+                where: { id: quotationRef.jobId },
+                data: { status: 'FINALIZED' }
+            });
 
-            // Deduct inventory and record ledger entries
+            // Deduct inventory and write stock ledger entries for each used spare part
             for (const { sparePartId, qty } of inventoryItems) {
                 await tx.sparePart.update({
                     where: { id: sparePartId },
@@ -283,7 +401,7 @@ router.put('/:id/finalize', authenticate, requireRole('MANAGER'), async (req: Au
                 await tx.stockLedger.create({
                     data: {
                         sparePartId,
-                        change: -qty,
+                        change: -qty, // Negative value indicates stock consumption
                         reason: `Used in quotation for vehicle ${quotationRef.vehicleNumber}`,
                         quotationId: req.params.id,
                         jobNumber: quotationRef.job.jobNumber,
@@ -291,6 +409,7 @@ router.put('/:id/finalize', authenticate, requireRole('MANAGER'), async (req: Au
                 });
             }
 
+            // Notify the admin that the quotation is finalized and the customer can be contacted
             await tx.notification.create({
                 data: {
                     fromRole: 'MANAGER',
@@ -302,6 +421,7 @@ router.put('/:id/finalize', authenticate, requireRole('MANAGER'), async (req: Au
             });
         });
 
+        // Return the updated quotation outside the transaction
         const quotation = await prisma.quotation.findUnique({
             where: { id: req.params.id },
             include: { job: { include: { images: true } }, vehicle: true, items: true },
@@ -314,7 +434,12 @@ router.put('/:id/finalize', authenticate, requireRole('MANAGER'), async (req: Au
     }
 });
 
-// PATCH /api/quotations/:id/notify - admin marks customer as notified via WhatsApp
+// ── PATCH /api/quotations/:id/notify ─────────────────────────────────────────
+/**
+ * Admin marks the customer as notified after contacting them via WhatsApp.
+ * Sets the quotation to CUSTOMER_NOTIFIED and marks the job as COMPLETED.
+ * Also sends an in-app notification to the manager confirming the job is done.
+ */
 router.patch('/:id/notify', authenticate, requireRole('ADMIN'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const quotation = await prisma.quotation.findUnique({
@@ -322,6 +447,8 @@ router.patch('/:id/notify', authenticate, requireRole('ADMIN'), async (req: Auth
             include: { job: true },
         });
         if (!quotation) { res.status(404).json({ error: 'Quotation not found' }); return; }
+
+        // Only finalized quotations can be marked as customer-notified
         if (quotation.status !== 'FINALIZED' && quotation.status !== 'CUSTOMER_NOTIFIED') {
             res.status(400).json({ error: 'Quotation must be finalized before notifying customer' });
             return;
@@ -341,13 +468,13 @@ router.patch('/:id/notify', authenticate, requireRole('ADMIN'), async (req: Auth
             },
         });
 
-        // Update job status to COMPLETED
+        // Mark the job as COMPLETED — the full workflow is now done
         await prisma.job.update({
             where: { id: quotation.jobId },
             data: { status: 'COMPLETED' },
         });
 
-        // Notify manager
+        // Inform the manager that the job has been closed out
         await prisma.notification.create({
             data: {
                 fromRole: 'ADMIN',

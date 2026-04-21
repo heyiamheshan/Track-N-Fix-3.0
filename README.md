@@ -260,4 +260,4 @@ npm run build   # Builds both backend and frontend for production
 
 ---
 
-*TrackNFix 3.0 — Jayakody Auto Electrical*
+

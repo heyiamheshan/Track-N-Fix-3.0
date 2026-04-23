@@ -103,7 +103,6 @@ router.post('/', authenticate, requireRole('MANAGER'), async (req: AuthRequest, 
         const part = await prisma.sparePart.create({
             data: {
                 ...data,
-                // Convert ISO date string to a Date object, or leave undefined if not provided
                 purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : undefined,
             },
         });

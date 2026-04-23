@@ -1,3 +1,17 @@
+/**
+ * change-password/page.tsx — Mandatory First-Login Password Change
+ *
+ * Employees are created by the admin with a temporary password (isFirstLogin=true).
+ * AuthContext detects this flag and redirects the user here before they can
+ * access any other page.
+ *
+ * On success:
+ *  - The API clears the isFirstLogin flag server-side.
+ *  - The stored user object in localStorage is updated locally so the context
+ *    does not redirect back here on the next render cycle.
+ *  - After a 2-second success screen, login() is called to re-evaluate the role
+ *    and route the user to their correct dashboard.
+ */
 "use client";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -7,6 +21,7 @@ import { useAuth } from "@/context/AuthContext";
 import { authAPI } from "@/lib/api";
 import { Shield, Eye, EyeOff, CheckCircle } from "lucide-react";
 
+//Schema validation
 const schema = z.object({
     currentPassword: z.string().min(1, "Current password required"),
     newPassword: z.string().min(6, "Minimum 6 characters"),
@@ -17,6 +32,7 @@ const schema = z.object({
 });
 type FormData = z.infer<typeof schema>;
 
+//Change password page
 export default function ChangePasswordPage() {
     const { user, login, logout } = useAuth();
     const [error, setError] = useState("");
@@ -24,11 +40,11 @@ export default function ChangePasswordPage() {
     const [done, setDone] = useState(false);
     const [showCurrent, setShowCurrent] = useState(false);
     const [showNew, setShowNew] = useState(false);
-
+//handle the form submission
     const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
         resolver: zodResolver(schema),
     });
-
+//submit handler
     const onSubmit = async (data: FormData) => {
         setError("");
         setLoading(true);
@@ -53,7 +69,7 @@ export default function ChangePasswordPage() {
             setLoading(false);
         }
     };
-
+//if the password is changed successfully redirect to the dashboard
     if (done) {
         return (
             <div className="min-h-screen flex items-center justify-center p-4">
@@ -67,7 +83,7 @@ export default function ChangePasswordPage() {
             </div>
         );
     }
-
+//change password form
     return (
         <div className="min-h-screen flex items-center justify-center p-4">
             <div className="fixed inset-0 overflow-hidden pointer-events-none">

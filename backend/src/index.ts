@@ -60,7 +60,7 @@ app.use(cors({
         }
         return callback(null, true);
     },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning'],
     credentials: true,
 }));
@@ -205,9 +205,42 @@ cron.schedule('0 1 * * *', async () => {
     }
 });
 
+// ── Inventory Seed ────────────────────────────────────────────────────────────
+async function seedInventoryIfEmpty() {
+    const count = await prisma.sparePart.count();
+    if (count > 0) return;
+
+    const parts = [
+        { name: 'Car Battery 12V 60Ah', serialNumber: 'BAT-12V-60', description: 'Maintenance-free car battery', boughtPrice: 8500, sellingPrice: 12000, quantity: 10, lowStockThreshold: 3, supplierName: 'Exide Lanka' },
+        { name: 'Alternator Belt', serialNumber: 'BLT-ALT-01', description: 'V-belt for alternator', boughtPrice: 450, sellingPrice: 800, quantity: 20, lowStockThreshold: 5, supplierName: 'Gates Lanka' },
+        { name: 'Brake Pad Set (Front)', serialNumber: 'BP-FRT-01', description: 'Front disc brake pads', boughtPrice: 1800, sellingPrice: 3200, quantity: 15, lowStockThreshold: 4, supplierName: 'Bosch Lanka' },
+        { name: 'Brake Pad Set (Rear)', serialNumber: 'BP-RER-01', description: 'Rear disc brake pads', boughtPrice: 1600, sellingPrice: 2800, quantity: 12, lowStockThreshold: 4, supplierName: 'Bosch Lanka' },
+        { name: 'Engine Oil Filter', serialNumber: 'FLT-OIL-01', description: 'Standard engine oil filter', boughtPrice: 350, sellingPrice: 650, quantity: 30, lowStockThreshold: 8, supplierName: 'Toyota Spare Parts' },
+        { name: 'Air Filter', serialNumber: 'FLT-AIR-01', description: 'Engine air intake filter', boughtPrice: 500, sellingPrice: 900, quantity: 25, lowStockThreshold: 6, supplierName: 'Toyota Spare Parts' },
+        { name: 'Spark Plug (NGK)', serialNumber: 'SPK-NGK-01', description: 'NGK standard spark plug', boughtPrice: 280, sellingPrice: 500, quantity: 50, lowStockThreshold: 10, supplierName: 'NGK Lanka' },
+        { name: 'Ignition Coil', serialNumber: 'IGN-COIL-01', description: 'Direct ignition coil', boughtPrice: 2200, sellingPrice: 3800, quantity: 8, lowStockThreshold: 2, supplierName: 'Bosch Lanka' },
+        { name: 'Fuse Box Set', serialNumber: 'FUSE-BOX-01', description: 'Assorted fuse set 5A-30A', boughtPrice: 120, sellingPrice: 250, quantity: 40, lowStockThreshold: 10, supplierName: 'Local Supplier' },
+        { name: 'Wiper Blade (600mm)', serialNumber: 'WPR-600-01', description: '600mm universal wiper blade', boughtPrice: 380, sellingPrice: 700, quantity: 18, lowStockThreshold: 4, supplierName: 'Bosch Lanka' },
+        { name: 'Radiator Coolant 1L', serialNumber: 'RAD-COOL-1L', description: 'Antifreeze coolant concentrate', boughtPrice: 600, sellingPrice: 1000, quantity: 22, lowStockThreshold: 5, supplierName: 'Total Lanka' },
+        { name: 'Engine Oil 5W-30 4L', serialNumber: 'OIL-5W30-4L', description: 'Synthetic engine oil 4 litre', boughtPrice: 3200, sellingPrice: 5500, quantity: 15, lowStockThreshold: 4, supplierName: 'Mobil Lanka' },
+        { name: 'Power Steering Fluid', serialNumber: 'PSF-01', description: 'Power steering hydraulic fluid', boughtPrice: 450, sellingPrice: 800, quantity: 12, lowStockThreshold: 3, supplierName: 'Total Lanka' },
+        { name: 'Brake Fluid DOT4', serialNumber: 'BRK-FLD-DOT4', description: 'DOT4 brake fluid 500ml', boughtPrice: 380, sellingPrice: 700, quantity: 20, lowStockThreshold: 5, supplierName: 'Bosch Lanka' },
+        { name: 'Headlight Bulb H4', serialNumber: 'BULB-H4-01', description: 'H4 halogen headlight bulb 60/55W', boughtPrice: 350, sellingPrice: 650, quantity: 24, lowStockThreshold: 6, supplierName: 'Philips Lanka' },
+        { name: 'Starter Motor', serialNumber: 'STR-MOT-01', description: '12V starter motor', boughtPrice: 7500, sellingPrice: 12000, quantity: 4, lowStockThreshold: 1, supplierName: 'Denso Lanka' },
+        { name: 'Wheel Bearing (Front)', serialNumber: 'WHL-BRG-FRT', description: 'Front wheel hub bearing', boughtPrice: 1200, sellingPrice: 2200, quantity: 8, lowStockThreshold: 2, supplierName: 'NSK Lanka' },
+        { name: 'Timing Belt', serialNumber: 'TMG-BLT-01', description: 'Engine timing belt', boughtPrice: 1800, sellingPrice: 3200, quantity: 6, lowStockThreshold: 2, supplierName: 'Gates Lanka' },
+        { name: 'Voltage Regulator', serialNumber: 'VOLT-REG-01', description: 'Alternator voltage regulator', boughtPrice: 950, sellingPrice: 1800, quantity: 7, lowStockThreshold: 2, supplierName: 'Bosch Lanka' },
+        { name: 'Car Horn 12V', serialNumber: 'HORN-12V-01', description: 'Dual tone electric horn', boughtPrice: 450, sellingPrice: 850, quantity: 10, lowStockThreshold: 3, supplierName: 'Local Supplier' },
+    ];
+
+    const result = await prisma.sparePart.createMany({ data: parts, skipDuplicates: true });
+    console.log(`[SEED] Inserted ${result.count} sample spare parts into inventory`);
+}
+
 // ── Server Start ──────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
     console.log(`🚗 TrackNFix API running on http://localhost:${PORT}`);
+    await seedInventoryIfEmpty();
 });
 
 export default app;

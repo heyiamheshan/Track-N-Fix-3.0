@@ -1,3 +1,22 @@
+/**
+ * employee/page.tsx — Employee Dashboard
+ *
+ * The primary workspace for EMPLOYEE-role users. Divided into three tabs:
+ *
+ *  1. Create Job  — 4-step wizard: select type → before photos → after photos → notes & submit
+ *  2. My Submitted Jobs — read-only history of all jobs created by the logged-in employee
+ *  3. Attendance  — daily check-in/check-out, overtime, leave and holiday management
+ *
+ * Special behaviours:
+ *  - On first page load, the check-in modal pops up automatically if the employee has
+ *    no attendance record for today and no pending check-in request.
+ *  - While an approved leave is active, the entire dashboard is replaced with a
+ *    fullscreen lock-out screen showing a live countdown to the leave's end time.
+ *  - Voice notes recorded in Step 4 are uploaded separately before the job is submitted
+ *    so that the file is available even if the main submit call retries.
+ *
+ * API dependencies: jobsAPI, voiceAPI, attendanceAPI (all from @/lib/api)
+ */
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -8,22 +27,28 @@ import { Plus, Send, CheckCircle, Wrench, Car, Zap, AlertTriangle, FileText, Clo
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 
+/** The three possible job categories an employee can open. */
 type JobType = "SERVICE" | "REPAIR" | "ACCIDENT_RECOVERY";
+/** Wizard steps for the job creation flow; "done" is the success screen. */
 type Step = "select_type" | "before_images" | "after_images" | "notes" | "done";
 
+/** Minimal job identity returned after the initial POST /api/jobs call. */
 interface CreatedJob {
     id: string;
     jobNumber: number;
 }
 
+/** Static metadata used to render the job-type selector cards. */
 const JOB_TYPES: { value: JobType; label: string; desc: string; icon: React.ReactNode; color: string }[] = [
     { value: "SERVICE", label: "Monthly Service", desc: "Routine maintenance and oil change", icon: <Wrench className="w-6 h-6" />, color: "blue" },
     { value: "REPAIR", label: "Repair", desc: "Mechanical or electrical repair work", icon: <Zap className="w-6 h-6" />, color: "amber" },
     { value: "ACCIDENT_RECOVERY", label: "Accident Recovery", desc: "Body work and accident damage repair", icon: <AlertTriangle className="w-6 h-6" />, color: "red" },
 ];
 
+/** Dashboard tab identifiers. */
 type Tab = "create" | "history" | "attendance";
 
+/** Shape of the /api/attendance/today response used to drive the Attendance tab UI. */
 interface AttendanceToday {
     attendance: { id: string; checkInTime: string | null; checkOutTime: string | null; status: string } | null;
     pendingRequests: { id: string; type: string; requestedTime: string; status: string }[];
@@ -33,6 +58,7 @@ interface AttendanceToday {
     pendingReturnReq: any;
 }
 
+/** Historical records shown in the Attendance tab's "My Records" section. */
 interface MyAttendance {
     requests: any[];
     leaves: any[];
@@ -40,9 +66,11 @@ interface MyAttendance {
     holidays: any[];
     attendance: any[];
 }
-
+//employee dashboard
 export default function EmployeeDashboard() {
     const { user } = useAuth();
+
+    // ── Job creation wizard state ─────────────────────────────────────────────
     const [step, setStep] = useState<Step>("select_type");
     const [jobType, setJobType] = useState<JobType>("SERVICE");
     const [vehicleNumber, setVehicleNumber] = useState("");
@@ -58,17 +86,20 @@ export default function EmployeeDashboard() {
     const [historyLoading, setHistoryLoading] = useState(false);
     const [viewingJob, setViewingJob] = useState<any | null>(null);
 
+    // ── Voice recording state ─────────────────────────────────────────────────
     const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
     const [isRecording, setIsRecording] = useState(false);
     const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
 
     // ── Attendance state ──────────────────────────────────────────────────────
-    const [todayStatus, setTodayStatus] = useState<AttendanceToday | null>(null);
-    const [myAttendance, setMyAttendance] = useState<MyAttendance | null>(null);
-    const [attLoading, setAttLoading] = useState(false);
-    const [attActionLoading, setAttActionLoading] = useState(false);
-    const [attError, setAttError] = useState("");
+    const [todayStatus, setTodayStatus] = useState<AttendanceToday | null>(null); // today's snapshot from API
+    const [myAttendance, setMyAttendance] = useState<MyAttendance | null>(null);  // historical records
+    const [attLoading, setAttLoading] = useState(false);       // tab-level fetch spinner
+    const [attActionLoading, setAttActionLoading] = useState(false); // button-level submit spinner
+    const [attError, setAttError] = useState("");              // inline error shown inside modals
+
+    // Modal visibility and form state for each attendance action
     const [showCheckInModal, setShowCheckInModal] = useState(false);
     const [checkoutReason, setCheckoutReason] = useState("");
     const [showCheckoutModal, setShowCheckoutModal] = useState(false);
@@ -90,6 +121,8 @@ export default function EmployeeDashboard() {
     const [showLeaveEndModal, setShowLeaveEndModal] = useState(false);
     const [timeLeft, setTimeLeft] = useState("");
 
+    // ── Live leave countdown timer ─────────────────────────────────────────────
+    // Ticks every second while an active leave exists; clears itself when leave ends.
     useEffect(() => {
         if (!todayStatus?.activeLeave) return;
         const leaveTo = new Date(todayStatus.activeLeave.leaveTo).getTime();
@@ -110,6 +143,12 @@ export default function EmployeeDashboard() {
         return () => clearInterval(interval);
     }, [todayStatus?.activeLeave]);
 
+    /**
+     * Fetches today's attendance snapshot and applies two automatic UI side-effects:
+     *  1. Auto-pops the check-in modal if no attendance or pending request exists yet.
+     *  2. Auto-pops the leave-end confirmation modal if the leave period has expired
+     *     but the employee has not yet confirmed their return.
+     */
     const fetchTodayStatus = useCallback(async () => {
         try {
             const res = await attendanceAPI.today();
@@ -132,7 +171,7 @@ export default function EmployeeDashboard() {
             }
         } catch { /* not logged in yet */ }
     }, []);
-
+//fetch the attendance history
     const fetchMyAttendance = useCallback(async () => {
         try {
             const res = await attendanceAPI.my();
@@ -150,7 +189,7 @@ export default function EmployeeDashboard() {
             Promise.all([fetchTodayStatus(), fetchMyAttendance()]).finally(() => setAttLoading(false));
         }
     }, [tab, fetchTodayStatus, fetchMyAttendance]);
-
+//handle the check in
     const handleCheckIn = async () => {
         setAttActionLoading(true);
         setAttError("");
@@ -162,7 +201,7 @@ export default function EmployeeDashboard() {
             setAttError(e?.response?.data?.error || "Failed to send check-in request");
         } finally { setAttActionLoading(false); }
     };
-
+//handle the check out
     const handleCheckOut = async () => {
         setAttActionLoading(true);
         setAttError("");
@@ -175,7 +214,7 @@ export default function EmployeeDashboard() {
             setAttError(e?.response?.data?.error || "Failed to send checkout request");
         } finally { setAttActionLoading(false); }
     };
-
+//handle the overtime start
     const handleOvertimeStart = async () => {
         setAttActionLoading(true);
         setAttError("");
@@ -188,7 +227,7 @@ export default function EmployeeDashboard() {
             setAttError(e?.response?.data?.error || "Failed to request overtime");
         } finally { setAttActionLoading(false); }
     };
-
+//handle the overtime end
     const handleOvertimeEnd = async (overtimeId: string) => {
         setAttActionLoading(true);
         try {
@@ -199,6 +238,7 @@ export default function EmployeeDashboard() {
         } finally { setAttActionLoading(false); }
     };
 
+    /** Submits the leave application after validating date/time inputs. */
     const handleApplyLeave = async () => {
         setAttActionLoading(true);
         setAttError("");
@@ -208,7 +248,7 @@ export default function EmployeeDashboard() {
             setAttActionLoading(false);
             return;
         }
-
+//validate the time format
         const timeRegex = /^\d{2}:\d{2}$/;
         const setFromTime = leaveForm.leaveFromTime || "09:00";
         const setToTime = leaveForm.leaveToTime || "18:00";
@@ -239,7 +279,7 @@ export default function EmployeeDashboard() {
             setAttError(e?.response?.data?.error || "Failed to apply for leave");
         } finally { setAttActionLoading(false); }
     };
-
+//handle the confirm leave end
     const handleConfirmLeaveEnd = async (leaveId: string) => {
         setAttActionLoading(true);
         try {
@@ -250,7 +290,7 @@ export default function EmployeeDashboard() {
             setAttError(e?.response?.data?.error || "Failed to confirm leave end");
         } finally { setAttActionLoading(false); }
     };
-
+//handle the request holiday
     const handleRequestHoliday = async () => {
         setAttActionLoading(true);
         setAttError("");
@@ -274,6 +314,7 @@ export default function EmployeeDashboard() {
         } finally { setAttActionLoading(false); }
     };
 
+    /** Returns a Tailwind text-colour class that matches each attendance status value. */
     const statusColor = (status: string) => {
         switch (status) {
             case "PRESENT": return "text-emerald-400";
@@ -295,6 +336,7 @@ export default function EmployeeDashboard() {
         }
     }, [tab]);
 
+    /** Creates the job record (DRAFT) and advances the wizard to the before-photos step. */
     const createJob = async () => {
         if (!vehicleNumber.trim()) { setError("Vehicle number is required"); return; }
         setLoading(true);
@@ -311,6 +353,7 @@ export default function EmployeeDashboard() {
         }
     };
 
+    /** Requests microphone access and starts a new MediaRecorder session. */
     const startRecording = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -337,20 +380,28 @@ export default function EmployeeDashboard() {
             setError("Could not access microphone.");
         }
     };
-
+//stop the recording
     const stopRecording = () => {
         if (mediaRecorder && isRecording) {
             mediaRecorder.stop();
             setIsRecording(false);
         }
     };
-
+//clear the audio
     const clearAudio = () => {
         setAudioBlob(null);
         if (audioUrl) URL.revokeObjectURL(audioUrl);
         setAudioUrl(null);
     };
 
+    /**
+     * Finalises the job:
+     *  1. Uploads the voice note (if recorded) to get a permanent URL.
+     *  2. Patches the job with the notes and voice note URL.
+     *  3. Submits the job (transitions from DRAFT → SUBMITTED).
+     */
+    
+    //handle the submit job
     const submitJob = async () => {
         if (!job) return;
         setLoading(true);
@@ -374,7 +425,7 @@ export default function EmployeeDashboard() {
             setLoading(false);
         }
     };
-
+//reset the form
     const reset = () => {
         setStep("select_type");
         setJob(null);
@@ -1160,7 +1211,7 @@ export default function EmployeeDashboard() {
                                     {viewingJob.voiceNoteUrl && (
                                         <div className="mt-2 text-slate-400">
                                             <p className="text-xs mb-1">Attached Voice Note</p>
-                                            <audio src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${viewingJob.voiceNoteUrl}`} controls className="w-full h-10" />
+                                            <audio src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${viewingJob.voiceNoteUrl}`} controls preload="none" className="w-full h-10" />
                                         </div>
                                     )}
                                 </div>

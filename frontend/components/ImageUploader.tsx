@@ -1,18 +1,35 @@
+/**
+ * ImageUploader.tsx — Drag-and-Drop Photo Upload Component
+ *
+ * Used in the job creation wizard (employee) and the quotation review modal (manager)
+ * to upload BEFORE, AFTER, or PART images for a specific job.
+ *
+ * Each dropped/selected file is immediately uploaded to POST /api/images/:jobId via
+ * imagesAPI, and the returned ImageRecord is added to local state. Uploaded images
+ * can be individually deleted via DELETE /api/images/:id.
+ *
+ * The parent component receives the current list of uploaded images via the
+ * onUploaded callback, allowing it to gate "Continue" buttons on at least one upload.
+ */
 "use client";
 import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { Upload, X, ImageIcon } from "lucide-react";
 import { imagesAPI } from "@/lib/api";
 
+/** Props for the ImageUploader component. */
 interface ImageUploaderProps {
     jobId: string;
+    /** Which phase of the job these images belong to. */
     phase: "BEFORE" | "AFTER" | "PART";
     label: string;
     description?: string;
+    /** Called with the full updated image list after each upload or deletion. */
     onUploaded?: (images: ImageRecord[]) => void;
     existingImages?: ImageRecord[];
 }
 
+/** A single uploaded image record returned from the API. */
 interface ImageRecord {
     id: string;
     url: string;

@@ -1,9 +1,24 @@
+/**
+ * forgot-password/page.tsx — Password Reset via Email OTP
+ *
+ * A 3-step flow for users who cannot log in:
+ *  Step 1 (email)  — User enters their registered email; the API sends a 6-digit OTP.
+ *  Step 2 (otp)    — User enters the OTP; the API validates it and returns a short-lived
+ *                    resetToken that authorises the password change.
+ *  Step 3 (reset)  — User sets a new password using the resetToken; redirected to login.
+ *
+ * Security notes:
+ *  - The "email sent" message is generic to prevent user enumeration.
+ *  - The OTP expires after 10 minutes server-side.
+ *  - The resetToken is single-use and consumed on successful password reset.
+ */
 "use client";
 import { useState } from "react";
 import Link from "next/link";
 import { authAPI } from "@/lib/api";
 import { Mail, KeyRound, Lock, CheckCircle, ArrowLeft } from "lucide-react";
 
+/** Wizard step names for the password-reset flow. */
 type ForgotStep = "email" | "otp" | "reset" | "done";
 
 export default function ForgotPasswordPage() {
@@ -17,6 +32,7 @@ export default function ForgotPasswordPage() {
     const [error, setError] = useState("");
     const [message, setMessage] = useState("");
 
+//handle send otp
     const handleSendOtp = async (e: React.FormEvent) => {
         e.preventDefault();
         setError("");
@@ -31,7 +47,7 @@ export default function ForgotPasswordPage() {
             setLoading(false);
         }
     };
-
+//handle verify otp
     const handleVerifyOtp = async (e: React.FormEvent) => {
         e.preventDefault();
         setError("");
@@ -46,7 +62,7 @@ export default function ForgotPasswordPage() {
             setLoading(false);
         }
     };
-
+//handle reset password
     const handleReset = async (e: React.FormEvent) => {
         e.preventDefault();
         if (newPassword !== confirmPassword) { setError("Passwords do not match"); return; }

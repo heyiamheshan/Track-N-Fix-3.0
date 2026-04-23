@@ -1,9 +1,8 @@
 /**
- * testApp.ts
- * Lightweight Express app for integration tests.
- * Registers all routes but deliberately omits:
- *   - cron jobs   (side-effectful, time-dependent)
- *   - app.listen  (port binding unnecessary in supertest)
+ * testAppNF.ts — Express app for non-functional tests
+ *
+ * Identical to testApp.ts but also mounts the attendance route,
+ * which is needed for the non-functional security/role checks.
  */
 
 import express from 'express';

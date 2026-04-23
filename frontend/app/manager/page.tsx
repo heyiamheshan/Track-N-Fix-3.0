@@ -1,3 +1,9 @@
+/**
+ * Manager Dashboard — reviews and finalises quotations sent by the admin, manages the spare-parts
+ * inventory (stock levels, ledger, low-stock alerts), views attendance overviews with PDF/CSV export,
+ * accesses financial analytics (revenue, COGS, profit margin by job category), searches vehicle history,
+ * and interacts with the AI voice assistant for quick lookups.
+ */
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -14,6 +20,7 @@ import {
 
 type Tab = "quotations" | "search" | "employees" | "attendance" | "inventory" | "financials";
 
+/** Spare part record from the inventory; lowStockThreshold triggers a low-stock badge in the UI. */
 interface SparePart {
     id: string; name: string; serialNumber: string; description?: string;
     boughtPrice: number; sellingPrice: number; quantity: number;
@@ -21,22 +28,23 @@ interface SparePart {
     purchaseDate?: string; createdAt: string;
 }
 
+/** Blank template used to reset the Add/Edit part form. Default threshold of 5 covers most workshop scenarios. */
 const EMPTY_PART: Omit<SparePart, "id" | "createdAt"> = {
     name: "", serialNumber: "", description: "", boughtPrice: 0, sellingPrice: 0,
     quantity: 0, lowStockThreshold: 5, supplierName: "", supplierDetails: "", purchaseDate: "",
 };
-
+//quotation item interface
 interface QuotationItem {
     id?: string; description: string; partReplaced?: string; price: number; laborCost: number;
     sparePartId?: string; quantity?: number;
 }
-
+//job interface
 interface Job {
     id: string; jobNumber: number; jobType: string; notes: string; status: string; voiceNoteUrl?: string;
     employee: { name: string }; images: { id: string; url: string; phase: string }[];
     insuranceCompany?: string; createdAt: string;
 }
-
+//quotation interface
 interface Quotation {
     id: string; vehicleNumber: string; ownerName?: string; telephone?: string;
     address?: string; vehicleType?: string; color?: string; insuranceCompany?: string;
@@ -45,16 +53,19 @@ interface Quotation {
 }
 
 interface Notification { id: string; message: string; vehicleNumber?: string; isRead: boolean; createdAt: string; }
-
+// manager dashboard component
 export default function ManagerDashboard() {
     const [tab, setTab] = useState<Tab>("quotations");
+
+    // ── Quotation state ────────────────────────────────────────────────────────
     const [quotations, setQuotations] = useState<Quotation[]>([]);
+    /** Recent = FINALIZED + CUSTOMER_NOTIFIED; used for the recent-activity summary strip. */
     const [recentQuotations, setRecentQuotations] = useState<Quotation[]>([]);
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [editQ, setEditQ] = useState<Quotation | null>(null);
     const [editItems, setEditItems] = useState<QuotationItem[]>([]);
 
-    // Create Quotation Context
+    // ── Create quotation state (manager can create quotations directly for jobs) ─
     const [createQJob, setCreateQJob] = useState<Job | null>(null);
     const [qForm, setQForm] = useState({ vehicleNumber: "", ownerName: "", address: "", telephone: "", vehicleType: "", color: "", insuranceCompany: "", jobDetails: "" });
     const [qItems, setQItems] = useState<{ description: string; partReplaced?: string; price: number; laborCost: number; quantity?: number; sparePartId?: string }[]>([{ description: "", partReplaced: "", price: 0, laborCost: 0, quantity: 1 }]);
@@ -65,11 +76,13 @@ export default function ManagerDashboard() {
     const [employees, setEmployees] = useState<any[]>([]);
     const [empLoading, setEmpLoading] = useState(false);
 
-    // AI Assistant — vehicle history modal
+    // ── AI Assistant ───────────────────────────────────────────────────────────
+    /** Populated by the AI assistant when it looks up a vehicle; drives the vehicle-history modal. */
     const [aiVehicleModal, setAiVehicleModal] = useState<{ vehicleNumber: string; data: any } | null>(null);
+    /** Hidden iframe used to trigger the browser's native print dialog for quotation PDFs. */
     const printFrameRef = useRef<HTMLIFrameElement | null>(null);
 
-    // Attendance
+    // ── Attendance overview state ──────────────────────────────────────────────
     const [attPeriod, setAttPeriod] = useState<"weekly" | "monthly">("weekly");
     const [attDate, setAttDate] = useState("");
     const [attOverview, setAttOverview] = useState<{ period: string; startDate: string; endDate: string; overview: any[] } | null>(null);
@@ -82,7 +95,7 @@ export default function ManagerDashboard() {
     const [attArchiving, setAttArchiving] = useState(false);
     const [attEmpList, setAttEmpList] = useState<any[]>([]);
 
-    // Inventory
+    // ── Inventory state ────────────────────────────────────────────────────────
     const [parts, setParts] = useState<SparePart[]>([]);
     const [invTotalValue, setInvTotalValue] = useState(0);
     const [invLoading, setInvLoading] = useState(false);
@@ -92,14 +105,17 @@ export default function ManagerDashboard() {
     const [adjustReason, setAdjustReason] = useState("");
     const [invSearch, setInvSearch] = useState("");
     const [invSearchResults, setInvSearchResults] = useState<SparePart[]>([]);
-    const [invSearchOpen, setInvSearchOpen] = useState<number | null>(null); // index of item row being searched
+    /** Index of the quotation line-item row that has an open inventory search dropdown. */
+    const [invSearchOpen, setInvSearchOpen] = useState<number | null>(null);
+    /** Debounce timer ref — prevents firing an inventory search on every keystroke. */
     const invSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // Ledger
+    // ── Stock ledger modal state ───────────────────────────────────────────────
     const [ledgerPart, setLedgerPart] = useState<SparePart | null>(null);
     const [ledgerEntries, setLedgerEntries] = useState<{ id: string; change: number; reason?: string; quotationId?: string; jobNumber?: number; createdAt: string }[]>([]);
     const [ledgerLoading, setLedgerLoading] = useState(false);
 
+    //handle open the ledger
     const openLedger = async (p: SparePart) => {
         setLedgerPart(p);
         setLedgerLoading(true);
@@ -109,7 +125,7 @@ export default function ManagerDashboard() {
         } catch { setLedgerEntries([]); }
         finally { setLedgerLoading(false); }
     };
-
+    //handle open the inventory
     const fetchInventory = useCallback(async () => {
         setInvLoading(true);
         try {
@@ -124,13 +140,15 @@ export default function ManagerDashboard() {
         if (tab === "inventory") fetchInventory();
     }, [tab, fetchInventory]);
 
+    //handle open the add part
     const openAddPart = () => { setEditingPartId(null); setPartForm({ ...EMPTY_PART }); setAdjustReason(""); };
+    //handle open the edit part
     const openEditPart = (p: SparePart) => {
         setEditingPartId(p.id);
         setPartForm({ name: p.name, serialNumber: p.serialNumber, description: p.description || "", boughtPrice: p.boughtPrice, sellingPrice: p.sellingPrice, quantity: p.quantity, lowStockThreshold: p.lowStockThreshold, supplierName: p.supplierName || "", supplierDetails: p.supplierDetails || "", purchaseDate: p.purchaseDate ? p.purchaseDate.slice(0, 10) : "" });
         setAdjustReason("");
     };
-
+    //handle save the part
     const savePart = async () => {
         if (!partForm) return;
         setPartSaving(true);
@@ -148,13 +166,13 @@ export default function ManagerDashboard() {
             alert(e?.response?.data?.error || "Failed to save part");
         } finally { setPartSaving(false); }
     };
-
+    //handle delete the part
     const deletePart = async (id: string, name: string) => {
         if (!confirm(`Delete "${name}" from inventory?`)) return;
         try { await inventoryAPI.delete(id); fetchInventory(); }
         catch { alert("Failed to delete part"); }
     };
-
+    //handle search the inventory parts
     const searchInventoryParts = useCallback(async (q: string) => {
         if (!q.trim()) { setInvSearchResults([]); return; }
         try {
@@ -163,12 +181,14 @@ export default function ManagerDashboard() {
         } catch { setInvSearchResults([]); }
     }, []);
 
+    /** Debounced handler: fires inventory search 300 ms after the user stops typing. */
     const handleInvSearchChange = (q: string) => {
         setInvSearch(q);
         if (invSearchTimer.current) clearTimeout(invSearchTimer.current);
         invSearchTimer.current = setTimeout(() => searchInventoryParts(q), 300);
     };
 
+    /** Populates an edit-quotation line item from a selected inventory part, linking sparePartId so stock is decremented on finalise. */
     const selectPartForItem = (idx: number, part: SparePart) => {
         const n = [...editItems];
         n[idx] = { ...n[idx], description: part.name, partReplaced: part.serialNumber, price: part.sellingPrice, sparePartId: part.id, quantity: (n[idx] as any).quantity || 1 };
@@ -178,6 +198,7 @@ export default function ManagerDashboard() {
         setInvSearchResults([]);
     };
 
+    /** Same as selectPartForItem but targets the new-quotation form (qItems) instead of editItems. */
     const selectPartForCreateItem = (idx: number, part: SparePart) => {
         const n = [...qItems];
         n[idx] = { ...n[idx], description: part.name, partReplaced: part.serialNumber, price: part.sellingPrice, sparePartId: part.id, quantity: (n[idx] as any).quantity || 1 };
@@ -187,7 +208,7 @@ export default function ManagerDashboard() {
         setInvSearchResults([]);
     };
 
-    // Analytics / Financials
+    // ── Analytics / Financials ─────────────────────────────────────────────────
     type AnalyticsSummary = {
         period: { range: string; start: string; end: string };
         revenue: { total: number; cogs: number; grossProfit: number; profitMargin: number };
@@ -198,11 +219,13 @@ export default function ManagerDashboard() {
             topByValue: { id: string; name: string; quantity: number; boughtPrice: number; sellingPrice: number; stockValue: number; unitsConsumedInPeriod: number; lowStock: boolean }[];
         };
     };
+    //handle open the analytics
     const [finRange, setFinRange] = useState<"daily" | "weekly" | "monthly">("monthly");
     const [finDate, setFinDate] = useState("");
     const [finData, setFinData] = useState<AnalyticsSummary | null>(null);
     const [finLoading, setFinLoading] = useState(false);
 
+    //handle fetch the analytics
     const fetchAnalytics = useCallback(async (range: "daily" | "weekly" | "monthly", date: string) => {
         setFinLoading(true);
         try {
@@ -222,6 +245,7 @@ export default function ManagerDashboard() {
     const [searchResult, setSearchResult] = useState<{ vehicle: Record<string, string | undefined>; jobs: Job[] } | null>(null);
     const [searchError, setSearchError] = useState("");
 
+    //handle fetch the overview
     const fetchOverview = useCallback(async (period: "weekly" | "monthly", date: string) => {
         setAttLoading(true);
         try {
@@ -230,7 +254,7 @@ export default function ManagerDashboard() {
         } catch { /* silent */ }
         finally { setAttLoading(false); }
     }, []);
-
+    //handle fetch the history
     const fetchHistory = useCallback(async () => {
         setHistLoading(true);
         try {
@@ -244,6 +268,10 @@ export default function ManagerDashboard() {
         finally { setHistLoading(false); }
     }, [histEmpFilter, histStart, histEnd]);
 
+    /**
+     * Moves all active attendance records to the history archive and clears the live tables.
+     * Irreversible — requires explicit user confirmation before proceeding.
+     */
     const handleArchive = async () => {
         if (!confirm("Archive all current attendance records? This moves them to history and clears the active tables.")) return;
         setAttArchiving(true);
@@ -255,7 +283,7 @@ export default function ManagerDashboard() {
         } catch { alert("Archive failed. Please try again."); }
         finally { setAttArchiving(false); }
     };
-
+    //handle status badge class
     const statusBadgeClass = (status: string) => {
         if (!status) return "bg-slate-600/20 text-slate-400";
         const s = status.toLowerCase();
@@ -269,6 +297,7 @@ export default function ManagerDashboard() {
         return "bg-slate-600/20 text-slate-400";
     };
 
+    /** Generates a styled landscape PDF of the current attendance overview using jsPDF + autoTable. */
     const downloadAttPDF = () => {
         if (!attOverview) return;
         const doc = new jsPDF({ orientation: "landscape" });
@@ -314,6 +343,7 @@ export default function ManagerDashboard() {
         doc.save(`Attendance_${label}.pdf`);
     };
 
+    /** Exports the attendance overview as a CSV file using a temporary anchor element for the download. */
     const downloadAttCSV = () => {
         if (!attOverview) return;
         const headers = ["Employee", "Email", "Days Present", "Leave Days", "Overtime (hrs)", "Early Checkouts", "Holidays", "Current Status", "Conflict"];
@@ -330,6 +360,13 @@ export default function ManagerDashboard() {
         URL.revokeObjectURL(url);
     };
 
+    // ── Initial data load ─────────────────────────────────────────────────────
+
+    /**
+     * Loads quotations and notifications in parallel on mount.
+     * Manager only sees quotations that have been sent to them (SENT_TO_MANAGER)
+     * or are already in a terminal delivery state (FINALIZED / CUSTOMER_NOTIFIED).
+     */
     const fetchData = useCallback(async () => {
         setLoading(true);
         try {
@@ -357,20 +394,21 @@ export default function ManagerDashboard() {
             attendanceAPI.managerEmployees().then(r => setAttEmpList(Array.isArray(r.data) ? r.data : [])).catch(() => { });
         }
     }, [tab, attPeriod, attDate, fetchOverview]);
-
+    //handle open the edit
     const openEdit = (q: Quotation) => {
         setEditQ(q);
         setEditItems(q.items.length > 0 ? q.items.map(i => ({ ...i })) : [{ description: "", price: 0, laborCost: 0, partReplaced: "" }]);
     };
-
+    //handle item subtotal
     const itemSubtotal = (i: QuotationItem) => ((i.price || 0) + (i.laborCost || 0)) * (i.quantity || 1);
+    //handle total
     const total = (items: QuotationItem[]) => items.reduce((s, i) => s + itemSubtotal(i), 0);
 
     // ── AI Assistant handlers ────────────────────────────────────────────────
     const handleAIVehicleHistory = useCallback((vehicleNumber: string, data: any) => {
         setAiVehicleModal({ vehicleNumber, data });
     }, []);
-
+    //handle print report
     const handleAIPrintReport = useCallback((vehicleNumber: string, data: any) => {
         if (!data) return;
         const doc = new jsPDF();
@@ -418,7 +456,7 @@ export default function ManagerDashboard() {
                 q ? `LKR ${(q.totalAmount || 0).toLocaleString()}` : "—",
             ];
         });
-
+        //handle print report
         autoTable(doc, {
             startY: 85,
             head: [["Date", "Type", "Technician", "Status", "Amount"]],
@@ -430,7 +468,7 @@ export default function ManagerDashboard() {
 
         doc.save(`service-history-${vehicleNumber}.pdf`);
     }, []);
-
+    //handle finalize
     const finalize = async () => {
         if (!editQ) return;
         setFinalizing(true);
@@ -445,7 +483,7 @@ export default function ManagerDashboard() {
             alert(msg);
         } finally { setFinalizing(false); }
     };
-
+//handle generate PDF
     const generatePDF = (q: Quotation) => {
         const doc = new jsPDF();
         // Header
@@ -469,7 +507,7 @@ export default function ManagerDashboard() {
         doc.setLineWidth(0.5);
         doc.setDrawColor(37, 99, 235);
         doc.line(14, 54, 196, 54);
-
+        //handle generate PDF
         const details = [
             ["Vehicle Number", q.vehicleNumber], ["Owner Name", q.ownerName || "—"],
             ["Vehicle Type", q.vehicleType || "—"], ["Color", q.color || "—"],
@@ -525,7 +563,7 @@ export default function ManagerDashboard() {
             footStyles: { fillColor: [15, 23, 42], textColor: 255, fontStyle: "bold" },
             alternateRowStyles: { fillColor: [248, 250, 252] },
         });
-
+        //handle generate PDF
         const finalY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable?.finalY || 200;
         doc.setFont("helvetica", "italic");
         doc.setFontSize(9);
@@ -535,7 +573,7 @@ export default function ManagerDashboard() {
 
         doc.save(`Quotation_${q.vehicleNumber}_Job${q.job.jobNumber}.pdf`);
     };
-
+//handle search
     const handleSearch = async () => {
         if (!searchQ.trim()) return;
         setSearchError("");
@@ -548,7 +586,7 @@ export default function ManagerDashboard() {
             setSearchError("No records found.");
         }
     };
-
+    //handle download service record
     const downloadServiceRecord = (result: { vehicle: Record<string, string | undefined>; jobs: Job[] }) => {
         const doc = new jsPDF();
         doc.setFillColor(15, 23, 42);
@@ -560,7 +598,7 @@ export default function ManagerDashboard() {
         doc.setFontSize(9);
         doc.setFont("helvetica", "normal");
         doc.text(`Jayakody Auto Electrical · Generated: ${new Date().toLocaleDateString("en-GB")}`, 14, 32);
-
+        //handle download service record
         const v = result.vehicle;
         doc.setTextColor(0, 0, 0);
         doc.setFontSize(11);
@@ -577,7 +615,7 @@ export default function ManagerDashboard() {
             doc.setFont("helvetica", "normal");
             doc.text(val || "—", col + 28, row);
         });
-
+        //handle download service record
         const histY = 60 + Math.ceil(vDetails.length / 2) * 8 + 8;
         doc.setFont("helvetica", "bold");
         doc.setFontSize(11);
@@ -600,7 +638,7 @@ export default function ManagerDashboard() {
 
         doc.save(`ServiceRecord_${v.vehicleNumber}.pdf`);
     };
-
+//handle create Quotation
     const submitQuotation = async () => {
         if (!createQJob) return;
         setQLoading(true);
@@ -616,7 +654,7 @@ export default function ManagerDashboard() {
             setQLoading(false);
         }
     };
-
+//handle create Custom Quotation
     const handleCreateCustomQuotation = () => {
         setCreateQJob({ id: '' } as any);
         setQForm({ vehicleNumber: searchQ || "", ownerName: "", address: "", telephone: "", vehicleType: "", color: "", insuranceCompany: "", jobDetails: "" });
@@ -1596,7 +1634,7 @@ export default function ManagerDashboard() {
                                 {editQ.job.voiceNoteUrl && (
                                     <div className={`mt-3 pt-3 ${editQ.job.notes ? "border-t border-amber-500/10" : ""}`}>
                                         <p className="text-xs text-amber-400 font-medium mb-2">Voice Note</p>
-                                        <audio className="w-full h-8" controls src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${editQ.job.voiceNoteUrl}`} />
+                                        <audio className="w-full h-8" controls preload="none" src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${editQ.job.voiceNoteUrl}`} />
                                     </div>
                                 )}
                             </div>

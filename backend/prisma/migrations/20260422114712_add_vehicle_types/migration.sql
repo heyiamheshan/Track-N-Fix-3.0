@@ -1,0 +1,3 @@
+-- vehicleType is stored as TEXT in the database (not a PostgreSQL enum).
+-- New enum values (VAN, BUS, MOTORCYCLE, THREE_WHEELER, LORRY, PICKUP) are
+-- validated at the application layer by Prisma; no DDL change is required.

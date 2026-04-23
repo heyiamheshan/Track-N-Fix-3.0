@@ -1,13 +1,28 @@
+/**
+ * DashboardLayout.tsx — Shared Page Shell for All Role Dashboards
+ *
+ * Wraps dashboard pages with:
+ *  - A sticky top navigation bar (logo, role badge, user name, sign-out button)
+ *  - A page header area (title, optional subtitle, optional action buttons)
+ *  - A centred main content area with max-width constraint
+ *  - A footer with the workshop name
+ *
+ * Route protection: if the user is not authenticated (no valid session in AuthContext),
+ * the layout redirects to /login. While the session is loading it renders a spinner
+ * so the protected content is never briefly visible.
+ */
 "use client";
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { LogOut, Bell } from "lucide-react";
 
+/** Props accepted by DashboardLayout — title is required, others are optional. */
 interface DashboardLayoutProps {
     children: React.ReactNode;
     title: string;
     subtitle?: string;
+    /** Rendered in the top-right of the page header; typically a primary action button. */
     actions?: React.ReactNode;
 }
 
@@ -49,7 +64,18 @@ export default function DashboardLayout({ children, title, subtitle, actions }: 
                         <div className={`badge ${roleColors[user.role] || "badge-blue"} hidden sm:flex`}>
                             {user.role}
                         </div>
-                        <span className="text-slate-400 text-sm hidden sm:block">{user.name}</span>
+
+                        {/* Profile avatar — shows first letter of name, full name and email on hover */}
+                        <div className="hidden sm:flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-full bg-blue-600/20 border border-blue-500/30 flex items-center justify-center flex-shrink-0">
+                                <span className="text-blue-400 font-bold text-sm">{user.name?.[0]?.toUpperCase()}</span>
+                            </div>
+                            <div className="flex flex-col leading-tight">
+                                <span className="text-white text-xs font-medium">{user.name}</span>
+                                <span className="text-slate-500 text-[10px]">{user.email}</span>
+                            </div>
+                        </div>
+
                         <button onClick={logout} className="flex items-center gap-1.5 text-slate-500 hover:text-slate-200 transition-colors text-sm">
                             <LogOut className="w-4 h-4" />
                             <span className="hidden sm:block">Sign out</span>

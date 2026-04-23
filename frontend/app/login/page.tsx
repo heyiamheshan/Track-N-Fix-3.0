@@ -1,3 +1,14 @@
+/**
+ * login/page.tsx — Sign-In Page
+ *
+ * Entry point for all user roles (EMPLOYEE, ADMIN, MANAGER).
+ * Submits credentials to POST /api/auth/signin and calls AuthContext.login()
+ * on success, which stores the JWT and redirects the user to their role-specific
+ * dashboard. Client-side validation is handled by react-hook-form + zod.
+ *
+ * If isFirstLogin is true on the returned user object, AuthContext redirects
+ * the user to /change-password before they can access the dashboard.
+ */
 "use client";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -8,6 +19,7 @@ import { useAuth } from "@/context/AuthContext";
 import { authAPI } from "@/lib/api";
 import { Wrench, Lock } from "lucide-react";
 
+/** Zod schema for login form — email format + non-empty password. */
 const schema = z.object({
     email: z.string().email("Invalid email"),
     password: z.string().min(1, "Password required"),
@@ -94,7 +106,7 @@ export default function LoginPage() {
                 </div>
 
                 <p className="text-center text-xs text-slate-600 mt-6 flex items-center justify-center gap-1">
-                    <Wrench className="w-3 h-3" /> Powered by TrackNFix 3.0
+                    <Wrench className="w-3 h-3" /> © 2025 Jayakody Auto Electrical. 
                 </p>
             </div>
         </div>

@@ -1,15 +1,62 @@
+/**
+ * attendance.ts — Attendance, Leave, Overtime & Holiday Routes
+ *
+ * Manages all employee time-tracking workflows with a three-layer architecture:
+ *
+ * ── EMPLOYEE endpoints ────────────────────────────────────────────────────────
+ *   GET  /today                  – Current day attendance snapshot for the logged-in employee
+ *   GET  /my                     – Full attendance history (requests, leaves, overtime, holidays)
+ *   POST /checkin                – Submit a check-in request (requires admin approval)
+ *   POST /checkout               – Submit a checkout request (auto-detects early checkout before 18:30)
+ *   POST /overtime/start         – Request overtime approval
+ *   POST /overtime/end           – Confirm end of overtime
+ *   POST /leave                  – Apply for leave with date range
+ *   POST /leave/confirm-end      – Confirm return from leave
+ *   POST /holiday                – Request a personal holiday day
+ *
+ * ── ADMIN endpoints ───────────────────────────────────────────────────────────
+ *   GET  /admin/pending                      – All pending requests for review
+ *   PUT  /admin/request/:id/:action          – Approve/reject a check-in, checkout, or leave-end
+ *   PUT  /admin/overtime/:id/:action         – Approve/reject overtime requests
+ *   PUT  /admin/leave/:id/:action            – Approve/reject leave applications
+ *   PUT  /admin/holiday/:id/:action          – Approve/reject holiday requests
+ *
+ * ── MANAGER endpoints ─────────────────────────────────────────────────────────
+ *   GET  /manager/overview                   – Aggregated team attendance metrics (weekly/monthly)
+ *   POST /manager/archive                    – Archive current attendance to history table
+ *   GET  /manager/history                    – View archived attendance records
+ *   GET  /manager/employees                  – Live status snapshot for all employees
+ *
+ * Design notes:
+ *   - All check-in/checkout actions go through a PENDING → APPROVED/REJECTED approval flow.
+ *   - Attendance records are only written when the admin approves a request.
+ *   - Early checkout is defined as leaving before 18:30 (1110 minutes past midnight).
+ */
+
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import prisma from '../lib/prisma';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 
 const router = Router();
-const prisma = new PrismaClient();
 
-// ==== EMPLOYEE ====
+// ════════════════════════════════════════════════════════════════════════════════
+// EMPLOYEE ENDPOINTS
+// ════════════════════════════════════════════════════════════════════════════════
 
-// GET /today — today's attendance status for the logged-in employee
+// ── GET /today ────────────────────────────────────────────────────────────────
+/**
+ * Returns the logged-in employee's complete status for today:
+ *  - attendance record (check-in/out times and status)
+ *  - any pending approval requests
+ *  - active leave (if on leave and not yet confirmed end)
+ *  - active overtime (if overtime is currently approved)
+ *  - approved holiday for today
+ *
+ * The frontend uses this to render the correct action buttons (check in, check out, etc.).
+ */
 router.get('/today', authenticate, requireRole('EMPLOYEE'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
+        // Build a date range covering exactly today (midnight to midnight)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
@@ -17,6 +64,8 @@ router.get('/today', authenticate, requireRole('EMPLOYEE'), async (req: AuthRequ
 
         const empId = req.user!.id;
 
+        // Fetch all status-related records for today in parallel would be ideal;
+        // kept sequential here for clarity and to match original query ordering.
         const attendance = await prisma.attendance.findFirst({
             where: { employeeId: empId, date: { gte: today, lt: tomorrow } }
         });
@@ -40,14 +89,19 @@ router.get('/today', authenticate, requireRole('EMPLOYEE'), async (req: AuthRequ
     }
 });
 
-// GET /my — full attendance history for the logged-in employee
+// ── GET /my ───────────────────────────────────────────────────────────────────
+/**
+ * Returns the complete attendance history for the logged-in employee.
+ * Includes all attendance requests, leave applications, overtime records,
+ * holiday requests, and raw attendance check-in/out records.
+ */
 router.get('/my', authenticate, requireRole('EMPLOYEE'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const empId = req.user!.id;
-        const requests = await prisma.attendanceRequest.findMany({ where: { employeeId: empId }, orderBy: { createdAt: 'desc' } });
-        const leaves = await prisma.leave.findMany({ where: { employeeId: empId }, orderBy: { createdAt: 'desc' } });
+        const requests  = await prisma.attendanceRequest.findMany({ where: { employeeId: empId }, orderBy: { createdAt: 'desc' } });
+        const leaves    = await prisma.leave.findMany({ where: { employeeId: empId }, orderBy: { createdAt: 'desc' } });
         const overtimes = await prisma.overtime.findMany({ where: { employeeId: empId }, orderBy: { createdAt: 'desc' } });
-        const holidays = await prisma.holiday.findMany({ where: { employeeId: empId }, orderBy: { createdAt: 'desc' } });
+        const holidays  = await prisma.holiday.findMany({ where: { employeeId: empId }, orderBy: { createdAt: 'desc' } });
         const attendance = await prisma.attendance.findMany({ where: { employeeId: empId }, orderBy: { date: 'desc' } });
 
         res.json({ requests, leaves, overtimes, holidays, attendance });
@@ -57,12 +111,18 @@ router.get('/my', authenticate, requireRole('EMPLOYEE'), async (req: AuthRequest
     }
 });
 
-// POST /checkin
+// ── POST /checkin ─────────────────────────────────────────────────────────────
+/**
+ * Submits a check-in request for admin approval.
+ * Prevents duplicate requests — only one PENDING CHECKIN request per employee per day.
+ * The actual attendance record is created when the admin approves the request.
+ */
 router.post('/checkin', authenticate, requireRole('EMPLOYEE'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-        // Check if a PENDING CHECKIN request already exists for today
         const today = new Date();
         today.setHours(0, 0, 0, 0);
+
+        // Guard against duplicate check-in requests on the same day
         const existing = await prisma.attendanceRequest.findFirst({
             where: { employeeId: req.user!.id, type: 'CHECKIN', status: 'PENDING', createdAt: { gte: today } }
         });
@@ -70,6 +130,7 @@ router.post('/checkin', authenticate, requireRole('EMPLOYEE'), async (req: AuthR
             res.status(400).json({ error: 'A check-in request is already pending.' });
             return;
         }
+
         const request = await prisma.attendanceRequest.create({
             data: { employeeId: req.user!.id, type: 'CHECKIN', requestedTime: new Date(), status: 'PENDING' }
         });
@@ -80,17 +141,30 @@ router.post('/checkin', authenticate, requireRole('EMPLOYEE'), async (req: AuthR
     }
 });
 
-// POST /checkout
+// ── POST /checkout ────────────────────────────────────────────────────────────
+/**
+ * Submits a checkout request for admin approval.
+ * Automatically classifies the request as EARLY_CHECKOUT if it occurs before 18:30.
+ * Early checkouts require a reason and will be flagged for the admin.
+ */
 router.post('/checkout', authenticate, requireRole('EMPLOYEE'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const { reason } = req.body;
         const now = new Date();
         const currentMinutes = now.getHours() * 60 + now.getMinutes();
-        const isEarly = currentMinutes < 1110; // before 18:30
+
+        // 18:30 = 18 × 60 + 30 = 1110 minutes past midnight
+        const isEarly = currentMinutes < 1110;
         const type = isEarly ? 'EARLY_CHECKOUT' : 'CHECKOUT';
 
         const request = await prisma.attendanceRequest.create({
-            data: { employeeId: req.user!.id, type, requestedTime: now, reason: isEarly ? reason : null, status: 'PENDING' }
+            data: {
+                employeeId: req.user!.id,
+                type,
+                requestedTime: now,
+                reason: isEarly ? reason : null, // Only attach reason for early checkouts
+                status: 'PENDING'
+            }
         });
         res.status(201).json(request);
     } catch (err) {
@@ -99,11 +173,21 @@ router.post('/checkout', authenticate, requireRole('EMPLOYEE'), async (req: Auth
     }
 });
 
-// POST /overtime/start
+// ── POST /overtime/start ──────────────────────────────────────────────────────
+/**
+ * Requests admin approval to begin overtime.
+ * The admin must approve before overtime is officially recorded.
+ */
 router.post('/overtime/start', authenticate, requireRole('EMPLOYEE'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const request = await prisma.attendanceRequest.create({
-            data: { employeeId: req.user!.id, type: 'OVERTIME_START', requestedTime: new Date(), reason: req.body.reason, status: 'PENDING' }
+            data: {
+                employeeId: req.user!.id,
+                type: 'OVERTIME_START',
+                requestedTime: new Date(),
+                reason: req.body.reason,
+                status: 'PENDING'
+            }
         });
         res.status(201).json(request);
     } catch (err) {
@@ -112,11 +196,20 @@ router.post('/overtime/start', authenticate, requireRole('EMPLOYEE'), async (req
     }
 });
 
-// POST /overtime/end
+// ── POST /overtime/end ────────────────────────────────────────────────────────
+/**
+ * Signals the end of overtime, pending admin confirmation.
+ * When approved, the overtime end time is recorded and total overtime is calculated.
+ */
 router.post('/overtime/end', authenticate, requireRole('EMPLOYEE'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const request = await prisma.attendanceRequest.create({
-            data: { employeeId: req.user!.id, type: 'OVERTIME_END', requestedTime: new Date(), status: 'PENDING' }
+            data: {
+                employeeId: req.user!.id,
+                type: 'OVERTIME_END',
+                requestedTime: new Date(),
+                status: 'PENDING'
+            }
         });
         res.status(201).json(request);
     } catch (err) {
@@ -125,7 +218,11 @@ router.post('/overtime/end', authenticate, requireRole('EMPLOYEE'), async (req: 
     }
 });
 
-// POST /leave
+// ── POST /leave ───────────────────────────────────────────────────────────────
+/**
+ * Submits a leave application covering a date range (leaveFrom → leaveTo).
+ * The leave stays in PENDING status until an admin approves or rejects it.
+ */
 router.post('/leave', authenticate, requireRole('EMPLOYEE'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const { leaveFrom, leaveTo, reason } = req.body;
@@ -133,6 +230,7 @@ router.post('/leave', authenticate, requireRole('EMPLOYEE'), async (req: AuthReq
             res.status(400).json({ error: 'leaveFrom and leaveTo are required' });
             return;
         }
+
         const leave = await prisma.leave.create({
             data: {
                 employeeId: req.user!.id,
@@ -149,11 +247,21 @@ router.post('/leave', authenticate, requireRole('EMPLOYEE'), async (req: AuthReq
     }
 });
 
-// POST /leave/confirm-end
+// ── POST /leave/confirm-end ───────────────────────────────────────────────────
+/**
+ * Employee signals they have returned from leave.
+ * Creates a LEAVE_END request; admin approval sets leaveEndConfirmed = true,
+ * which removes the "ON_LEAVE" status from the employee's dashboard.
+ */
 router.post('/leave/confirm-end', authenticate, requireRole('EMPLOYEE'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const request = await prisma.attendanceRequest.create({
-            data: { employeeId: req.user!.id, type: 'LEAVE_END', requestedTime: new Date(), status: 'PENDING' }
+            data: {
+                employeeId: req.user!.id,
+                type: 'LEAVE_END',
+                requestedTime: new Date(),
+                status: 'PENDING'
+            }
         });
         res.status(201).json(request);
     } catch (err) {
@@ -162,7 +270,11 @@ router.post('/leave/confirm-end', authenticate, requireRole('EMPLOYEE'), async (
     }
 });
 
-// POST /holiday
+// ── POST /holiday ─────────────────────────────────────────────────────────────
+/**
+ * Requests a personal holiday day (e.g., public holiday not covered by standard leave).
+ * holidayDate must be provided; description is optional.
+ */
 router.post('/holiday', authenticate, requireRole('EMPLOYEE'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const { holidayDate, description } = req.body;
@@ -170,6 +282,7 @@ router.post('/holiday', authenticate, requireRole('EMPLOYEE'), async (req: AuthR
             res.status(400).json({ error: 'holidayDate is required' });
             return;
         }
+
         const holiday = await prisma.holiday.create({
             data: {
                 employeeId: req.user!.id,
@@ -186,9 +299,18 @@ router.post('/holiday', authenticate, requireRole('EMPLOYEE'), async (req: AuthR
 });
 
 
-// ==== ADMIN ====
+// ════════════════════════════════════════════════════════════════════════════════
+// ADMIN ENDPOINTS
+// ════════════════════════════════════════════════════════════════════════════════
 
-// GET /admin/pending — all pending requests for admin to review
+// ── GET /admin/pending ────────────────────────────────────────────────────────
+/**
+ * Returns all pending items waiting for admin/manager action, split into four groups:
+ *  - requests:  CHECKIN, CHECKOUT, EARLY_CHECKOUT, LEAVE_END
+ *  - overtimes: OVERTIME_START, OVERTIME_END
+ *  - leaves:    Leave applications
+ *  - holidays:  Holiday requests
+ */
 router.get('/admin/pending', authenticate, requireRole('ADMIN', 'MANAGER'), async (_req: Request, res: Response): Promise<void> => {
     try {
         const requests = await prisma.attendanceRequest.findMany({
@@ -211,6 +333,7 @@ router.get('/admin/pending', authenticate, requireRole('ADMIN', 'MANAGER'), asyn
             include: { employee: { select: { name: true, email: true } } },
             orderBy: { createdAt: 'desc' }
         });
+
         res.json({ requests, overtimes, leaves, holidays });
     } catch (err) {
         console.error('[GET /admin/pending]', err);
@@ -218,48 +341,69 @@ router.get('/admin/pending', authenticate, requireRole('ADMIN', 'MANAGER'), asyn
     }
 });
 
-// PUT /admin/request/:id/approve  or  /admin/request/:id/reject
+// ── PUT /admin/request/:id/:action ────────────────────────────────────────────
+/**
+ * Approves or rejects a check-in, checkout, early-checkout, or leave-end request.
+ *
+ * On APPROVE, the corresponding attendance record is updated:
+ *  - CHECKIN      → creates an Attendance row with checkInTime
+ *  - CHECKOUT     → sets checkOutTime on today's attendance
+ *  - EARLY_CHECKOUT → sets checkOutTime and marks attendance status as EARLY_CHECKOUT
+ *  - LEAVE_END    → confirms the employee's active leave as ended
+ */
 router.put('/admin/request/:id/:action', authenticate, requireRole('ADMIN'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const { action } = req.params;
         const newStatus = action === 'approve' ? 'APPROVED' : 'REJECTED';
+
+        // Update the request record first so both approve and reject paths are covered
         const request = await prisma.attendanceRequest.update({
             where: { id: req.params.id },
             data: { status: newStatus, adminId: req.user!.id, reviewedAt: new Date() }
         });
+
         if (action === 'approve') {
+            // Normalise to the start of the day for attendance record lookup
             const day = new Date(request.requestedTime);
             day.setHours(0, 0, 0, 0);
 
             if (request.type === 'CHECKIN') {
-                const existing = await prisma.attendance.findFirst({ where: { employeeId: request.employeeId, date: { gte: day } } });
+                // Only create attendance record if one doesn't already exist for today (safety guard)
+                const existing = await prisma.attendance.findFirst({
+                    where: { employeeId: request.employeeId, date: { gte: day } }
+                });
                 if (!existing) {
                     await prisma.attendance.create({
                         data: { employeeId: request.employeeId, date: day, checkInTime: request.requestedTime, status: 'PRESENT' }
                     });
                 }
             } else if (request.type === 'CHECKOUT') {
+                // Record the exact checkout time on the existing attendance record
                 await prisma.attendance.updateMany({
                     where: { employeeId: request.employeeId, date: { gte: day } },
                     data: { checkOutTime: request.requestedTime }
                 });
             } else if (request.type === 'EARLY_CHECKOUT') {
+                // Mark attendance status as EARLY_CHECKOUT so it appears differently in reports
                 await prisma.attendance.updateMany({
                     where: { employeeId: request.employeeId, date: { gte: day } },
                     data: { checkOutTime: request.requestedTime, status: 'EARLY_CHECKOUT' }
                 });
             } else if (request.type === 'LEAVE_END') {
+                // Find the employee's active leave and confirm it has ended
                 const activeLeaves = await prisma.leave.findMany({
                     where: { employeeId: request.employeeId, status: 'APPROVED', leaveEndConfirmed: false, leaveFrom: { lte: new Date() } },
                     orderBy: { leaveTo: 'desc' }
                 });
                 for (const leave of activeLeaves) {
                     if (leave.leaveTo > new Date()) {
+                        // Employee returned early — truncate the leave end date to now
                         await prisma.leave.update({
                             where: { id: leave.id },
                             data: { leaveTo: new Date(), leaveEndConfirmed: true }
                         });
                     } else {
+                        // Leave period has already passed — simply confirm the end
                         await prisma.leave.update({
                             where: { id: leave.id },
                             data: { leaveEndConfirmed: true }
@@ -268,6 +412,7 @@ router.put('/admin/request/:id/:action', authenticate, requireRole('ADMIN'), asy
                 }
             }
         }
+
         res.json({ message: 'Processed', request });
     } catch (err) {
         console.error('[PUT /admin/request/:id/:action]', err);
@@ -275,40 +420,62 @@ router.put('/admin/request/:id/:action', authenticate, requireRole('ADMIN'), asy
     }
 });
 
-// PUT /admin/overtime/:id/approve  or  /admin/overtime/:id/reject
+// ── PUT /admin/overtime/:id/:action ──────────────────────────────────────────
+/**
+ * Approves or rejects overtime requests.
+ *
+ * On APPROVE:
+ *  - OVERTIME_START → creates an Overtime record and sets overtimeStart on attendance
+ *  - OVERTIME_END   → updates the active Overtime record with end time and duration,
+ *                     sets overtimeEnd on attendance
+ */
 router.put('/admin/overtime/:id/:action', authenticate, requireRole('ADMIN'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const { action } = req.params;
         const newStatus = action === 'approve' ? 'APPROVED' : 'REJECTED';
+
         const request = await prisma.attendanceRequest.update({
             where: { id: req.params.id },
             data: { status: newStatus, adminId: req.user!.id, reviewedAt: new Date() }
         });
+
         if (action === 'approve') {
             const day = new Date(request.requestedTime);
             day.setHours(0, 0, 0, 0);
+
             if (request.type === 'OVERTIME_START') {
+                // Create an in-progress overtime record and stamp the attendance row
                 await prisma.overtime.create({
-                    data: { employeeId: request.employeeId, overtimeStart: request.requestedTime, status: 'APPROVED', reason: request.reason || '' }
+                    data: {
+                        employeeId: request.employeeId,
+                        overtimeStart: request.requestedTime,
+                        status: 'APPROVED',
+                        reason: request.reason || ''
+                    }
                 });
                 await prisma.attendance.updateMany({
                     where: { employeeId: request.employeeId, date: { gte: day } },
                     data: { overtimeStart: request.requestedTime }
                 });
             } else if (request.type === 'OVERTIME_END') {
-                const activeOT = await prisma.overtime.findFirst({ where: { employeeId: request.employeeId, status: 'APPROVED' } });
+                // Find the open overtime record and close it
+                const activeOT = await prisma.overtime.findFirst({
+                    where: { employeeId: request.employeeId, status: 'APPROVED' }
+                });
                 if (activeOT) {
                     await prisma.overtime.update({
                         where: { id: activeOT.id },
                         data: { overtimeEnd: request.requestedTime, status: 'COMPLETED', endConfirmed: true }
                     });
                 }
+                // Also stamp the attendance row with the overtime end time
                 await prisma.attendance.updateMany({
                     where: { employeeId: request.employeeId, date: { gte: day } },
                     data: { overtimeEnd: request.requestedTime }
                 });
             }
         }
+
         res.json({ message: 'Processed', request });
     } catch (err) {
         console.error('[PUT /admin/overtime/:id/:action]', err);
@@ -316,7 +483,11 @@ router.put('/admin/overtime/:id/:action', authenticate, requireRole('ADMIN'), as
     }
 });
 
-// PUT /admin/leave/:id/approve  or  /admin/leave/:id/reject
+// ── PUT /admin/leave/:id/:action ──────────────────────────────────────────────
+/**
+ * Approves or rejects a leave application.
+ * Sends an in-app notification to the employee when their leave is approved.
+ */
 router.put('/admin/leave/:id/:action', authenticate, requireRole('ADMIN'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const newStatus = req.params.action === 'approve' ? 'APPROVED' : 'REJECTED';
@@ -324,11 +495,19 @@ router.put('/admin/leave/:id/:action', authenticate, requireRole('ADMIN'), async
             where: { id: req.params.id },
             data: { status: newStatus, adminId: req.user!.id }
         });
+
         if (newStatus === 'APPROVED') {
+            // Notify the employee so they can see the outcome in their notification feed
             await prisma.notification.create({
-                data: { fromRole: 'ADMIN', toRole: 'EMPLOYEE', userId: leave.employeeId, message: 'Your leave request has been approved.' }
+                data: {
+                    fromRole: 'ADMIN',
+                    toRole: 'EMPLOYEE',
+                    userId: leave.employeeId,
+                    message: 'Your leave request has been approved.'
+                }
             });
         }
+
         res.json({ message: 'Processed', leave });
     } catch (err) {
         console.error('[PUT /admin/leave/:id/:action]', err);
@@ -336,7 +515,11 @@ router.put('/admin/leave/:id/:action', authenticate, requireRole('ADMIN'), async
     }
 });
 
-// PUT /admin/holiday/:id/approve  or  /admin/holiday/:id/reject
+// ── PUT /admin/holiday/:id/:action ────────────────────────────────────────────
+/**
+ * Approves or rejects a holiday request.
+ * Notifies the employee with the specific holiday date on approval.
+ */
 router.put('/admin/holiday/:id/:action', authenticate, requireRole('ADMIN'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const newStatus = req.params.action === 'approve' ? 'APPROVED' : 'REJECTED';
@@ -344,12 +527,19 @@ router.put('/admin/holiday/:id/:action', authenticate, requireRole('ADMIN'), asy
             where: { id: req.params.id },
             data: { status: newStatus, declaredBy: req.user!.id }
         });
+
         if (newStatus === 'APPROVED') {
-            // Notify employee of approval
+            // Notify employee of approval with the holiday date for clarity
             await prisma.notification.create({
-                data: { fromRole: 'ADMIN', toRole: 'EMPLOYEE', userId: holiday.employeeId, message: `Your holiday on ${new Date(holiday.holidayDate).toLocaleDateString()} has been approved.` }
+                data: {
+                    fromRole: 'ADMIN',
+                    toRole: 'EMPLOYEE',
+                    userId: holiday.employeeId,
+                    message: `Your holiday on ${new Date(holiday.holidayDate).toLocaleDateString()} has been approved.`
+                }
             });
         }
+
         res.json({ message: 'Processed', holiday });
     } catch (err) {
         console.error('[PUT /admin/holiday/:id/:action]', err);
@@ -358,25 +548,41 @@ router.put('/admin/holiday/:id/:action', authenticate, requireRole('ADMIN'), asy
 });
 
 
-// ==== MANAGER ====
+// ════════════════════════════════════════════════════════════════════════════════
+// MANAGER ENDPOINTS
+// ════════════════════════════════════════════════════════════════════════════════
 
-// GET /manager/overview
+// ── GET /manager/overview ─────────────────────────────────────────────────────
+/**
+ * Returns an aggregated attendance overview for all employees over a period.
+ * Supports 'weekly' (current week) and 'monthly' (current month) ranges.
+ *
+ * For each employee the response includes:
+ *  - daysPresent, leaveDays, overtimeHours, earlyCheckouts, holidayDays
+ *  - currentStatus: today's live status (PRESENT, ON_LEAVE, HOLIDAY, etc.)
+ *  - conflict: true if the employee is marked PRESENT but also on leave/holiday today
+ *
+ * Algorithm: initialises a map with all employees then merges attendance, leave,
+ * and holiday records into per-employee metrics in a single pass each.
+ */
 router.get('/manager/overview', authenticate, requireRole('MANAGER'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const period = (req.query.period as string) || 'weekly';
         const now = new Date();
         const startDate = new Date();
+
+        // Calculate period start date
         if (period === 'weekly') {
             startDate.setDate(now.getDate() - now.getDay()); // Start of week (Sunday)
             startDate.setHours(0, 0, 0, 0);
         } else if (period === 'monthly') {
-            startDate.setDate(1); // Start of month
+            startDate.setDate(1); // First day of current month
             startDate.setHours(0, 0, 0, 0);
         }
         const endDate = new Date();
         endDate.setHours(23, 59, 59, 999);
 
-        // 1. Initialize map with ALL employees
+        // Step 1: Initialise the overview map with ALL employees (ensures zero-value entries)
         const employees = await prisma.user.findMany({
             where: { role: 'EMPLOYEE' },
             select: { id: true, name: true, email: true }
@@ -393,44 +599,49 @@ router.get('/manager/overview', authenticate, requireRole('MANAGER'), async (req
             };
         }
 
-        // 2. Add Attendance Metrics
+        // Step 2: Merge attendance records — count days present, early checkouts, and overtime hours
         const attendances = await prisma.attendance.findMany({
             where: { date: { gte: startDate, lte: endDate } }
         });
-
         const todayStr = new Date().toDateString();
 
         for (const a of attendances) {
             if (!overviewMap[a.employeeId]) continue;
             overviewMap[a.employeeId].daysPresent++;
             if (a.status === 'EARLY_CHECKOUT') overviewMap[a.employeeId].earlyCheckouts++;
+
+            // Calculate overtime hours if both start and end are recorded
             if (a.overtimeStart && a.overtimeEnd) {
                 overviewMap[a.employeeId].overtimeHours +=
                     (new Date(a.overtimeEnd).getTime() - new Date(a.overtimeStart).getTime()) / 3600000;
             }
+
+            // Set today's live status from the attendance record
             if (a.date.toDateString() === todayStr) {
                 overviewMap[a.employeeId].currentStatus = a.status;
             }
         }
 
-        // 3. Add Leave Metrics
+        // Step 3: Merge leave records — count leave days and set ON_LEAVE status if active today
         const leaves = await prisma.leave.findMany({
             where: { status: 'APPROVED', leaveFrom: { lte: endDate }, leaveTo: { gte: startDate } }
         });
         for (const l of leaves) {
             if (!overviewMap[l.employeeId]) continue;
+
+            // Calculate intersection of leave period with the selected reporting window
             const intersectStart = l.leaveFrom > startDate ? l.leaveFrom : startDate;
-            const intersectEnd = l.leaveTo < endDate ? l.leaveTo : endDate;
+            const intersectEnd   = l.leaveTo   < endDate   ? l.leaveTo   : endDate;
             const days = Math.ceil((intersectEnd.getTime() - intersectStart.getTime()) / (1000 * 3600 * 24));
             overviewMap[l.employeeId].leaveDays += isNaN(days) ? 0 : Math.max(1, days);
 
-            // If they have an active leave today, set status
+            // Override current status if employee is actively on leave today
             if (l.leaveFrom <= new Date() && !l.leaveEndConfirmed) {
                 overviewMap[l.employeeId].currentStatus = 'ON_LEAVE';
             }
         }
 
-        // 4. Add Holiday Metrics
+        // Step 4: Merge holiday records
         const holidays = await prisma.holiday.findMany({
             where: { status: 'APPROVED', holidayDate: { gte: startDate, lte: endDate } }
         });
@@ -438,16 +649,18 @@ router.get('/manager/overview', authenticate, requireRole('MANAGER'), async (req
             if (!overviewMap[h.employeeId]) continue;
             overviewMap[h.employeeId].holidayDays++;
 
+            // Override current status if today is a holiday day
             if (h.holidayDate.toDateString() === todayStr) {
                 overviewMap[h.employeeId].currentStatus = 'HOLIDAY';
             }
         }
 
-        // 5. Calculate Conflicts (If daysPresent > 0 and (leaveDays > Math.expected or whatever), but simpler: if today they checked in BUT they are on leave/holiday)
-        // Just evaluating if they have a weird status combination:
+        // Step 5: Flag conflicts where an employee is marked PRESENT but also on leave/holiday
         for (const id in overviewMap) {
             const m = overviewMap[id];
-            if (m.currentStatus === 'PRESENT' && (leaves.some((l: any) => l.employeeId === id && l.leaveFrom.toDateString() === todayStr) || holidays.some((h: any) => h.employeeId === id && h.holidayDate.toDateString() === todayStr))) {
+            const onLeaveToday    = leaves.some((l: any)   => l.employeeId === id && l.leaveFrom.toDateString() === todayStr);
+            const onHolidayToday  = holidays.some((h: any) => h.employeeId === id && h.holidayDate.toDateString() === todayStr);
+            if (m.currentStatus === 'PRESENT' && (onLeaveToday || onHolidayToday)) {
                 m.conflict = true;
             }
         }
@@ -464,15 +677,23 @@ router.get('/manager/overview', authenticate, requireRole('MANAGER'), async (req
     }
 });
 
-// POST /manager/archive
+// ── POST /manager/archive ─────────────────────────────────────────────────────
+/**
+ * Archives all current attendance records into the attendanceHistory table,
+ * then clears the live attendance table.
+ * This is typically run at the end of a pay period so historical records are
+ * preserved separately from the active working table.
+ */
 router.post('/manager/archive', authenticate, requireRole('MANAGER'), async (_req: Request, res: Response): Promise<void> => {
     try {
         const records = await prisma.attendance.findMany({ include: { employee: true } });
+
+        // Copy each record to the history table with a snapshot of the employee name
         for (const att of records) {
             await prisma.attendanceHistory.create({
                 data: {
                     employeeId: att.employeeId,
-                    employeeName: att.employee.name,
+                    employeeName: att.employee.name,  // Denormalised for historical accuracy
                     date: att.date,
                     checkInTime: att.checkInTime,
                     checkOutTime: att.checkOutTime,
@@ -481,6 +702,8 @@ router.post('/manager/archive', authenticate, requireRole('MANAGER'), async (_re
                 }
             });
         }
+
+        // Clear the live attendance table after archiving
         await prisma.attendance.deleteMany({});
         res.json({ archived: records.length });
     } catch (err) {
@@ -489,7 +712,11 @@ router.post('/manager/archive', authenticate, requireRole('MANAGER'), async (_re
     }
 });
 
-// GET /manager/history
+// ── GET /manager/history ──────────────────────────────────────────────────────
+/**
+ * Returns archived attendance history records, most recently archived first.
+ * Used by the manager to review past attendance after the active table has been cleared.
+ */
 router.get('/manager/history', authenticate, requireRole('MANAGER'), async (_req: Request, res: Response): Promise<void> => {
     try {
         const history = await prisma.attendanceHistory.findMany({ orderBy: { archivedAt: 'desc' } });
@@ -500,16 +727,21 @@ router.get('/manager/history', authenticate, requireRole('MANAGER'), async (_req
     }
 });
 
-// GET /manager/employees
+// ── GET /manager/employees ────────────────────────────────────────────────────
+/**
+ * Returns a live status snapshot for every employee for today.
+ * Status priority: ON_LEAVE > HOLIDAY > attendance status > "Not Checked In"
+ * Used by the manager dashboard's real-time employee monitor.
+ */
 router.get('/manager/employees', authenticate, requireRole('MANAGER'), async (_req: Request, res: Response): Promise<void> => {
     try {
         const employees = await prisma.user.findMany({ where: { role: 'EMPLOYEE' } });
 
         const now = new Date();
         const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay = new Date(); endOfDay.setHours(23, 59, 59, 999);
+        const endOfDay   = new Date(); endOfDay.setHours(23, 59, 59, 999);
 
-        // Fetch all of today's live states
+        // Fetch all relevant records for today in three queries
         const attendances = await prisma.attendance.findMany({
             where: { date: { gte: startOfDay, lte: endOfDay } }
         });
@@ -520,17 +752,18 @@ router.get('/manager/employees', authenticate, requireRole('MANAGER'), async (_r
             where: { status: 'APPROVED', holidayDate: { gte: startOfDay, lte: endOfDay } }
         });
 
+        // Map each employee to their current status using the priority rule above
         const list = employees.map(e => {
             let status = 'Not Checked In';
 
             const att = attendances.find(a => a.employeeId === e.id);
-            const lv = leaves.find(l => l.employeeId === e.id && l.leaveTo > now);
+            const lv  = leaves.find(l => l.employeeId === e.id && l.leaveTo > now);
             const hol = holidays.find(h => h.employeeId === e.id);
 
-            // Determine snapshot priority
-            if (lv) status = 'ON_LEAVE';
-            else if (hol) status = 'HOLIDAY';
-            else if (att && att.status) status = att.status;
+            // Apply priority: leave > holiday > attendance record
+            if (lv)            status = 'ON_LEAVE';
+            else if (hol)      status = 'HOLIDAY';
+            else if (att?.status) status = att.status;
 
             return { id: e.id, name: e.name, todayStatus: status };
         });

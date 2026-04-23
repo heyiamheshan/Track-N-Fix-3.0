@@ -1,3 +1,26 @@
+// =============================================================================
+// TrackNFix 3.0 — Prisma Database Schema
+// System: Vehicle Service Record Management — Jayakody Auto Electrical
+// Database: PostgreSQL
+//
+// ── Tables (Models) ──────────────────────────────────────────────────────────
+//  1.  User               — Employees, Admins, and Managers (all roles in one table)
+//  2.  Vehicle            — Registered vehicles with owner contact details
+//  3.  Job                — Service/repair jobs created by employees
+//  4.  JobImage           — Before / After / Part photos attached to a job
+//  5.  Quotation          — Cost quotations created by admin, reviewed by manager
+//  6.  QuotationItem      — Individual line items (parts + labour) in a quotation
+//  7.  SparePart          — Inventory of spare parts managed by the manager
+//  8.  StockLedger        — Audit log of every stock quantity change per spare part
+//  9.  Notification       — In-app notifications sent between roles
+//  10. Attendance         — Daily attendance record for each employee
+//  11. AttendanceRequest  — Pending check-in / check-out / overtime requests awaiting admin approval
+//  12. Leave              — Leave applications submitted by employees
+//  13. Overtime           — Overtime session requests submitted by employees
+//  14. Holiday            — Single-day holiday requests submitted by employees
+//  15. AttendanceHistory  — Archived snapshot of attendance data after admin archives a period
+// =============================================================================
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -38,15 +61,15 @@ model User {
 }
 
 model Vehicle {
-  id             String      @id @default(uuid())
-  vehicleNumber  String      @unique
+  id             String       @id @default(uuid())
+  vehicleNumber  String       @unique
   ownerName      String?
   address        String?
   telephone      String?
-  vehicleType    String?
+  vehicleType    VehicleType?
   color          String?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
   whatsappNumber String?
   jobs           Job[]
   quotations     Quotation[]
@@ -90,7 +113,7 @@ model Quotation {
   ownerName        String?
   address          String?
   telephone        String?
-  vehicleType      String?
+  vehicleType      VehicleType?
   color            String?
   insuranceCompany String?
   jobDetails       String?
@@ -325,4 +348,8 @@ enum OvertimeStatus {
   APPROVED
   COMPLETED
   REJECTED
+}
+
+enum VehicleType {
+  CAR
 }

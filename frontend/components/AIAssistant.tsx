@@ -1,3 +1,20 @@
+/**
+ * AIAssistant.tsx — Voice-Activated AI Assistant (Manager only)
+ *
+ * A floating chat-style panel that lets the manager query the workshop system
+ * using natural language or voice input:
+ *
+ *  - Press the microphone button → MediaRecorder captures audio.
+ *  - Stop → audio blob is posted to POST /api/voice/query.
+ *  - The backend pipeline: Groq Whisper transcribes audio → LLaMA-3 classifies the
+ *    intent (e.g. "get_vehicle_history", "get_inventory_status") → the matched handler
+ *    fetches live data from the database and returns a structured response.
+ *  - The response is displayed as a message card with intent-specific UI
+ *    (vehicle history table, inventory list, financial summary, etc.).
+ *
+ * Text input is also supported for typed queries.
+ * The panel is collapsible; on mobile it renders as a bottom sheet.
+ */
 "use client";
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Mic, MicOff, X, Loader2, Volume2, Bot, ChevronDown, Printer, Car, Package, TrendingUp, Users } from "lucide-react";

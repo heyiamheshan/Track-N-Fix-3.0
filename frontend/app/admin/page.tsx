@@ -1,3 +1,8 @@
+/**
+ * Admin Dashboard — reviews employee job submissions, manages quotations,
+ * handles customer delivery notifications via WhatsApp, employee accounts,
+ * attendance approvals (check-in/out, leave, overtime, holiday), and vehicle record search.
+ */
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -7,6 +12,7 @@ import { Eye, ChevronRight, Send, Plus, Edit3, Search, Bell, X, Check, FileText,
 
 type Tab = "requests" | "quotations" | "delivery" | "notifications" | "search" | "employees" | "attendance";
 
+/** Job submitted by an employee; only SUBMITTED and REVIEWED statuses appear in admin requests. */
 interface Job {
     id: string; jobNumber: number; jobType: string; status: string; notes: string; voiceNoteUrl?: string;
     createdAt: string; vehicle: { vehicleNumber: string; ownerName?: string };
@@ -14,6 +20,7 @@ interface Job {
     insuranceCompany?: string;
 }
 
+/** Full quotation including line items; notifiedAt is set when admin marks customer as notified. */
 interface Quotation {
     id: string; vehicleNumber: string; ownerName?: string; telephone?: string;
     whatsappNumber?: string; vehicleType?: string; color?: string; insuranceCompany?: string;
@@ -32,6 +39,7 @@ interface Vehicle {
     vehicleType?: string; color?: string;
 }
 
+/** Result of a vehicle/telephone search — vehicle profile plus full job history. */
 interface SearchResult {
     vehicle: Vehicle;
     jobs: Job[];
@@ -72,12 +80,15 @@ export default function AdminDashboard() {
     const [editForm, setEditForm] = useState({ ownerName: "", telephone: "", whatsappNumber: "", vehicleType: "", color: "" });
     const [editSaving, setEditSaving] = useState(false);
 
+    const [togglingEmployee, setTogglingEmployee] = useState<string | null>(null);
+
     // Delivery / WhatsApp
     const [markingNotified, setMarkingNotified] = useState<string | null>(null);
     const [previewQ, setPreviewQ] = useState<Quotation | null>(null);
 
-    const MAPS_LINK = "https://maps.app.goo.gl/jayakodyauto"; // update with real link
+    const MAPS_LINK = "https://maps.app.goo.gl/jayakodyauto"; // TODO: replace with verified Google Maps short link
 
+    /** Builds the pre-filled WhatsApp message body sent to the customer when their vehicle is ready. */
     const buildWhatsAppMessage = (q: Quotation) => {
         const serviceType = JOB_TYPE_LABELS[q.job.jobType] || q.job.jobType;
         const amount = q.totalAmount ? `Rs. ${q.totalAmount.toFixed(2)}` : "to be confirmed";
@@ -91,10 +102,11 @@ export default function AdminDashboard() {
         );
     };
 
+    /** Opens WhatsApp web/app with a pre-filled message; normalises SL local format (07x…) to international (94x…). */
     const openWhatsApp = (q: Quotation) => {
         const phone = (q.whatsappNumber || "").replace(/\D/g, "");
         if (!phone) { alert("No WhatsApp number on record for this customer."); return; }
-        // Sri Lankan numbers: prepend country code if local format
+        // Sri Lankan numbers: prepend country code if local format (strip leading 0)
         const intl = phone.startsWith("94") ? phone : `94${phone.replace(/^0/, "")}`;
         const msg = encodeURIComponent(buildWhatsAppMessage(q));
         window.open(`https://wa.me/${intl}?text=${msg}`, "_blank", "noopener,noreferrer");
@@ -120,16 +132,19 @@ export default function AdminDashboard() {
     const [attLoading, setAttLoading] = useState(false);
     const [attActionLoading, setAttActionLoading] = useState<string | null>(null);
 
+    // ── Data fetchers ─────────────────────────────────────────────────────────
+
+    /** Loads only active (SUBMITTED / REVIEWED) jobs — completed jobs are not shown in requests tab. */
     const fetchJobs = useCallback(async () => {
         const res = await jobsAPI.list();
         setJobs(res.data.filter((j: Job) => ["SUBMITTED", "REVIEWED"].includes(j.status)));
     }, []);
-
+//fetch the quotations
     const fetchQuotations = useCallback(async () => {
         const res = await quotationsAPI.list();
         setQuotations(res.data);
     }, []);
-
+//fetch the notifications
     const fetchNotifications = useCallback(async () => {
         const res = await notificationsAPI.list();
         setNotifications(res.data);
@@ -151,6 +166,13 @@ export default function AdminDashboard() {
         }
     }, [tab]);
 
+    // ── Attendance ─────────────────────────────────────────────────────────────
+
+    /**
+     * Generic wrapper for approve/reject attendance actions.
+     * `key` is a unique string per button (e.g. "req-approve-{id}") so only
+     * the clicked button shows the loading spinner while others remain active.
+     */
     const handleAttAction = async (action: () => Promise<unknown>, key: string) => {
         setAttActionLoading(key);
         try {
@@ -161,7 +183,7 @@ export default function AdminDashboard() {
             alert(e?.response?.data?.error || "Action failed");
         } finally { setAttActionLoading(null); }
     };
-
+//handle the creation of the employee
     const handleCreateEmployee = async (e: React.FormEvent) => {
         e.preventDefault();
         setEmpError("");
@@ -177,33 +199,46 @@ export default function AdminDashboard() {
             setEmpSubmitting(false);
         }
     };
-
+//handle the toggle of the employee status
     const toggleEmployeeStatus = async (id: string, current: boolean) => {
-        await employeesAPI.toggleStatus(id, !current);
-        setEmployees(prev => prev.map(e => e.id === id ? { ...e, isActive: !current } : e));
+        setTogglingEmployee(id);
+        try {
+            await employeesAPI.toggleStatus(id, !current);
+            setEmployees(prev => prev.map(e => e.id === id ? { ...e, isActive: !current } : e));
+        } catch (e: any) {
+            const msg = e?.response?.data?.error || e?.message || 'Failed to update employee status';
+            const status = e?.response?.status || 'no response';
+            alert(`Error (${status}): ${msg}`);
+        } finally {
+            setTogglingEmployee(null);
+        }
     };
-
+//handle the review of the job
     const handleReview = async (job: Job) => {
         await jobsAPI.review(job.id);
         setReviewJob(job);
         fetchJobs();
     };
 
+    /**
+     * Opens the quotation creation form for a reviewed job.
+     * Attempts to auto-fill owner details from the vehicle registry;
+     * silently skips if the vehicle has no prior record (new customer).
+     */
     const proceedToQuotation = async (job: Job) => {
         setQuotationJob(job);
         const vn = job.vehicle.vehicleNumber;
         setQForm({ vehicleNumber: vn, ownerName: "", address: "", telephone: "", whatsappNumber: "", vehicleType: "", color: "", insuranceCompany: job.insuranceCompany || "", jobDetails: job.notes || "" });
         setQItems([{ description: "", partReplaced: "", price: 0, laborCost: 0 }]);
-        // Try auto-fill
         try {
             const vRes = await vehiclesAPI.lookup(vn);
             const v = vRes.data;
             setQForm(f => ({ ...f, ownerName: v.ownerName || "", address: v.address || "", telephone: v.telephone || "", whatsappNumber: v.whatsappNumber || "", vehicleType: v.vehicleType || "", color: v.color || "" }));
-        } catch { /* new vehicle */ }
+        } catch { /* new vehicle — form stays blank for manual entry */ }
         setReviewJob(null);
         setShowQuotationForm(true);
     };
-
+//handle the submission of the quotation
     const submitQuotation = async () => {
         if (!quotationJob) return;
         setQLoading(true);
@@ -219,7 +254,7 @@ export default function AdminDashboard() {
             setQLoading(false);
         }
     };
-
+//handle the submission of the quotation
     const sendToManager = async (qId: string) => {
         try {
             await quotationsAPI.send(qId);
@@ -228,7 +263,7 @@ export default function AdminDashboard() {
             alert(e?.response?.data?.error || "Failed to send to manager");
         }
     };
-
+//handle the save edit of the quotation
     const saveEdit = async () => {
         if (!editQuotation) return;
         setEditSaving(true);
@@ -240,7 +275,7 @@ export default function AdminDashboard() {
             alert(e?.response?.data?.error || "Failed to save");
         } finally { setEditSaving(false); }
     };
-
+//handle the search of the job
     const handleSearch = async () => {
         if (!searchQ.trim()) return;
         setSearchError("");
@@ -253,7 +288,7 @@ export default function AdminDashboard() {
             setSearchError("No records found for this search.");
         }
     };
-
+//get the unread count of the notifications
     const unreadCount = notifications.filter(n => !n.isRead).length;
 
     return (
@@ -613,9 +648,10 @@ export default function AdminDashboard() {
                                         <span className="text-xs text-slate-500">{emp._count?.jobs || 0} jobs</span>
                                         <button
                                             onClick={() => toggleEmployeeStatus(emp.id, emp.isActive)}
-                                            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all ${emp.isActive ? "border-red-500/30 text-red-400 hover:bg-red-500/10" : "border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"}`}
+                                            disabled={togglingEmployee === emp.id}
+                                            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all disabled:opacity-50 disabled:cursor-not-allowed ${emp.isActive ? "border-red-500/30 text-red-400 hover:bg-red-500/10" : "border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"}`}
                                         >
-                                            {emp.isActive ? <><UserX className="w-3.5 h-3.5" />Deactivate</> : <><UserCheck className="w-3.5 h-3.5" />Activate</>}
+                                            {togglingEmployee === emp.id ? "Saving…" : emp.isActive ? <><UserX className="w-3.5 h-3.5" />Deactivate</> : <><UserCheck className="w-3.5 h-3.5" />Activate</>}
                                         </button>
                                     </div>
                                 </div>
@@ -889,7 +925,7 @@ export default function AdminDashboard() {
                                 {reviewJob.voiceNoteUrl && (
                                     <div className="mt-3 pt-3 border-t border-white/10">
                                         <p className="text-xs text-slate-500 mb-2">Attached Voice Note</p>
-                                        <audio className="w-full h-8" controls src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${reviewJob.voiceNoteUrl}`} />
+                                        <audio className="w-full h-8" controls preload="none" src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${reviewJob.voiceNoteUrl}`} />
                                     </div>
                                 )}
                             </div>
@@ -948,7 +984,7 @@ export default function AdminDashboard() {
                                 {quotationJob.voiceNoteUrl && (
                                     <div className="mt-3 pt-3 border-t border-amber-500/10">
                                         <p className="text-xs text-amber-400 font-medium mb-2">Voice Note</p>
-                                        <audio className="w-full h-8" controls src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${quotationJob.voiceNoteUrl}`} />
+                                        <audio className="w-full h-8" controls preload="none" src={`${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}${quotationJob.voiceNoteUrl}`} />
                                     </div>
                                 )}
                             </div>

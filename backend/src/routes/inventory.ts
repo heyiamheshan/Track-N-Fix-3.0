@@ -1,3 +1,22 @@
+/**
+ * inventory.ts — Spare Parts Inventory Routes
+ *
+ * Provides full CRUD management for the spare parts inventory and a stock ledger
+ * for audit-trail tracking of every quantity change.
+ *
+ *   GET    /api/inventory               – List all spare parts with total inventory value (Manager only)
+ *   GET    /api/inventory/search?q=...  – Search parts by name or serial number (Manager only)
+ *   POST   /api/inventory               – Add a new spare part (Manager only)
+ *   PUT    /api/inventory/:id           – Edit part details or manually adjust stock (Manager only)
+ *   DELETE /api/inventory/:id           – Remove a part from inventory (Manager only)
+ *   GET    /api/inventory/:id/ledger    – View the stock change history for a part (Manager only)
+ *
+ * Stock ledger notes:
+ *   - Every stock change (manual adjustment or quotation deduction) creates a StockLedger record.
+ *   - Positive change values = stock added; negative values = stock consumed.
+ *   - Serial numbers must be unique; duplicate attempts return 409 Conflict.
+ */
+
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import prisma from '../lib/prisma';
@@ -5,6 +24,13 @@ import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
+// ── Input Validation Schema ───────────────────────────────────────────────────
+
+/**
+ * Validates the request body for creating a new spare part.
+ * lowStockThreshold defaults to 5 — the manager will be alerted when
+ * quantity drops below this value.
+ */
 const sparePartSchema = z.object({
     name: z.string().min(1),
     serialNumber: z.string().min(1),
@@ -18,12 +44,19 @@ const sparePartSchema = z.object({
     purchaseDate: z.string().optional(),
 });
 
-// GET /api/inventory - list all parts (Manager only)
+// ── GET /api/inventory ────────────────────────────────────────────────────────
+/**
+ * Returns all spare parts ordered by most recently added, plus the aggregate
+ * total inventory value (boughtPrice × quantity across all parts).
+ * The total value is used on the manager dashboard's financial summary card.
+ */
 router.get('/', authenticate, requireRole('MANAGER'), async (_req: AuthRequest, res: Response): Promise<void> => {
     try {
         const parts = await prisma.sparePart.findMany({
             orderBy: { createdAt: 'desc' },
         });
+
+        // Calculate total capital tied up in inventory
         const totalValue = parts.reduce((sum, p) => sum + p.boughtPrice * p.quantity, 0);
         res.json({ parts, totalValue });
     } catch (error) {
@@ -32,7 +65,12 @@ router.get('/', authenticate, requireRole('MANAGER'), async (_req: AuthRequest, 
     }
 });
 
-// GET /api/inventory/search?q=... - search parts by name or serial (Manager only)
+// ── GET /api/inventory/search ─────────────────────────────────────────────────
+/**
+ * Case-insensitive search across part names and serial numbers.
+ * Limited to 20 results to keep response sizes manageable.
+ * Used by the quotation form's spare-part selector for fast lookup.
+ */
 router.get('/search', authenticate, requireRole('MANAGER'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const q = (req.query.q as string) || '';
@@ -44,7 +82,7 @@ router.get('/search', authenticate, requireRole('MANAGER'), async (req: AuthRequ
                 ],
             },
             orderBy: { name: 'asc' },
-            take: 20,
+            take: 20, // Cap results to prevent large payloads
         });
         res.json(parts);
     } catch (error) {
@@ -53,7 +91,12 @@ router.get('/search', authenticate, requireRole('MANAGER'), async (req: AuthRequ
     }
 });
 
-// POST /api/inventory - add new part (Manager only)
+// ── POST /api/inventory ───────────────────────────────────────────────────────
+/**
+ * Adds a new spare part to inventory.
+ * Serial numbers are unique at the database level (Prisma P2002 error).
+ * purchaseDate is stored as a Date object if provided as an ISO string.
+ */
 router.post('/', authenticate, requireRole('MANAGER'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const data = sparePartSchema.parse(req.body);
@@ -66,13 +109,21 @@ router.post('/', authenticate, requireRole('MANAGER'), async (req: AuthRequest, 
         res.status(201).json(part);
     } catch (error) {
         if (error instanceof z.ZodError) { res.status(400).json({ error: error.errors }); return; }
+        // Handle unique constraint violation on serialNumber
         if ((error as any)?.code === 'P2002') { res.status(409).json({ error: 'Serial number already exists' }); return; }
         console.error(error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-// PUT /api/inventory/:id - update part or manually adjust stock (Manager only)
+// ── PUT /api/inventory/:id ────────────────────────────────────────────────────
+/**
+ * Updates spare part details and/or adjusts stock quantity.
+ *
+ * Only fields explicitly sent in the request body are updated (partial update).
+ * When the quantity changes, a StockLedger entry is automatically created to
+ * record who changed it, by how much, and why (adjustmentReason).
+ */
 router.put('/:id', authenticate, requireRole('MANAGER'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const existing = await prisma.sparePart.findUnique({ where: { id: req.params.id } });
@@ -80,24 +131,25 @@ router.put('/:id', authenticate, requireRole('MANAGER'), async (req: AuthRequest
 
         const {
             name, serialNumber, description, boughtPrice, sellingPrice,
-            quantity, lowStockThreshold, supplierName, supplierDetails, purchaseDate,
-            adjustmentReason,
+            quantity, lowStockThreshold, supplierName, supplierDetails,
+            purchaseDate, adjustmentReason,
         } = req.body;
 
+        // Build a partial update object — only include fields present in the request
         const updateData: Record<string, unknown> = {};
-        if (name !== undefined) updateData.name = name;
-        if (serialNumber !== undefined) updateData.serialNumber = serialNumber;
-        if (description !== undefined) updateData.description = description;
-        if (boughtPrice !== undefined) updateData.boughtPrice = boughtPrice;
-        if (sellingPrice !== undefined) updateData.sellingPrice = sellingPrice;
+        if (name !== undefined)             updateData.name = name;
+        if (serialNumber !== undefined)     updateData.serialNumber = serialNumber;
+        if (description !== undefined)      updateData.description = description;
+        if (boughtPrice !== undefined)      updateData.boughtPrice = boughtPrice;
+        if (sellingPrice !== undefined)     updateData.sellingPrice = sellingPrice;
         if (lowStockThreshold !== undefined) updateData.lowStockThreshold = lowStockThreshold;
-        if (supplierName !== undefined) updateData.supplierName = supplierName;
-        if (supplierDetails !== undefined) updateData.supplierDetails = supplierDetails;
-        if (purchaseDate !== undefined) updateData.purchaseDate = purchaseDate ? new Date(purchaseDate) : null;
+        if (supplierName !== undefined)     updateData.supplierName = supplierName;
+        if (supplierDetails !== undefined)  updateData.supplierDetails = supplierDetails;
+        if (purchaseDate !== undefined)     updateData.purchaseDate = purchaseDate ? new Date(purchaseDate) : null;
 
-        // Handle manual stock adjustment with ledger entry
+        // Handle manual stock adjustment — create a ledger entry for the difference
         if (quantity !== undefined && quantity !== existing.quantity) {
-            const change = quantity - existing.quantity;
+            const change = quantity - existing.quantity; // Positive = added, negative = removed
             updateData.quantity = quantity;
             await prisma.stockLedger.create({
                 data: {
@@ -117,7 +169,12 @@ router.put('/:id', authenticate, requireRole('MANAGER'), async (req: AuthRequest
     }
 });
 
-// DELETE /api/inventory/:id - delete part (Manager only)
+// ── DELETE /api/inventory/:id ─────────────────────────────────────────────────
+/**
+ * Permanently removes a spare part and its associated stock ledger entries.
+ * Only use for parts that were added by mistake; prefer setting quantity to 0
+ * for parts that are simply out of stock but may be re-ordered.
+ */
 router.delete('/:id', authenticate, requireRole('MANAGER'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         await prisma.sparePart.delete({ where: { id: req.params.id } });
@@ -128,7 +185,12 @@ router.delete('/:id', authenticate, requireRole('MANAGER'), async (req: AuthRequ
     }
 });
 
-// GET /api/inventory/:id/ledger - stock ledger for a part (Manager only)
+// ── GET /api/inventory/:id/ledger ─────────────────────────────────────────────
+/**
+ * Returns the complete stock change history for a specific spare part,
+ * most recent first. Each entry records the change amount, reason, and
+ * the quotation/job number if the change was caused by a finalized quotation.
+ */
 router.get('/:id/ledger', authenticate, requireRole('MANAGER'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const ledger = await prisma.stockLedger.findMany({

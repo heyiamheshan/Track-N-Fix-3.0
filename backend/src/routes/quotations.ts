@@ -23,6 +23,7 @@
 
 import { Router, Response } from 'express';
 import { z } from 'zod';
+import { VehicleType } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 
@@ -85,7 +86,7 @@ router.post('/', authenticate, requireRole('ADMIN', 'MANAGER'), async (req: Auth
                 address: data.address,
                 telephone: data.telephone,
                 whatsappNumber: data.whatsappNumber,
-                vehicleType: data.vehicleType,
+                vehicleType: data.vehicleType as VehicleType | undefined,
                 color: data.color,
             },
         });
@@ -116,7 +117,7 @@ router.post('/', authenticate, requireRole('ADMIN', 'MANAGER'), async (req: Auth
                 address: data.address,
                 telephone: data.telephone,
                 whatsappNumber: data.whatsappNumber,
-                vehicleType: data.vehicleType,
+                vehicleType: data.vehicleType as VehicleType | undefined,
                 color: data.color,
                 insuranceCompany: data.insuranceCompany,
                 jobDetails: data.jobDetails,

@@ -26,31 +26,36 @@ async function main() {
     });
 
     // ── Vehicles ───────────────────────────────────────────────────────────────
+    // vehicleType is stored as TEXT in the DB (not a PostgreSQL enum), so we omit
+    // it from Prisma upserts (which would cast to a non-existent enum type) and
+    // set it with a raw UPDATE afterwards.
     const v1 = await prisma.vehicle.upsert({
         where: { vehicleNumber: 'CAB-1234' },
         update: {},
-        create: { vehicleNumber: 'CAB-1234', ownerName: 'Asanka Perera', telephone: '0712345678', whatsappNumber: '0712345678', vehicleType: 'CAR', color: 'Silver', address: '12/A, Galle Road, Colombo 3' },
+        create: { vehicleNumber: 'CAB-1234', ownerName: 'Asanka Perera', telephone: '0712345678', whatsappNumber: '0712345678', color: 'Silver', address: '12/A, Galle Road, Colombo 3' },
     });
     const v2 = await prisma.vehicle.upsert({
         where: { vehicleNumber: 'WP-KA-5678' },
         update: {},
-        create: { vehicleNumber: 'WP-KA-5678', ownerName: 'Saman Silva', telephone: '0723456789', whatsappNumber: '0723456789', vehicleType: 'CAR', color: 'White', address: '45, Kandy Road, Kelaniya' },
+        create: { vehicleNumber: 'WP-KA-5678', ownerName: 'Saman Silva', telephone: '0723456789', whatsappNumber: '0723456789', color: 'White', address: '45, Kandy Road, Kelaniya' },
     });
     const v3 = await prisma.vehicle.upsert({
         where: { vehicleNumber: 'NC-9012' },
         update: {},
-        create: { vehicleNumber: 'NC-9012', ownerName: 'Dilshan Fernando', telephone: '0734567890', whatsappNumber: '0734567890', vehicleType: 'CAR', color: 'Blue', address: '78, Negombo Road, Wattala' },
+        create: { vehicleNumber: 'NC-9012', ownerName: 'Dilshan Fernando', telephone: '0734567890', whatsappNumber: '0734567890', color: 'Blue', address: '78, Negombo Road, Wattala' },
     });
     const v4 = await prisma.vehicle.upsert({
         where: { vehicleNumber: 'WP-CB-3456' },
         update: {},
-        create: { vehicleNumber: 'WP-CB-3456', ownerName: 'Kumari Jayawardena', telephone: '0745678901', whatsappNumber: '0745678901', vehicleType: 'CAR', color: 'Red', address: '23, Baseline Road, Colombo 8' },
+        create: { vehicleNumber: 'WP-CB-3456', ownerName: 'Kumari Jayawardena', telephone: '0745678901', whatsappNumber: '0745678901', color: 'Red', address: '23, Baseline Road, Colombo 8' },
     });
     const v5 = await prisma.vehicle.upsert({
         where: { vehicleNumber: 'SP-7890' },
         update: {},
-        create: { vehicleNumber: 'SP-7890', ownerName: 'Nimal Bandara', telephone: '0756789012', whatsappNumber: '0756789012', vehicleType: 'CAR', color: 'Black', address: '67, High Level Road, Maharagama' },
+        create: { vehicleNumber: 'SP-7890', ownerName: 'Nimal Bandara', telephone: '0756789012', whatsappNumber: '0756789012', color: 'Black', address: '67, High Level Road, Maharagama' },
     });
+    // Set vehicleType as plain TEXT to avoid the missing enum cast issue
+    await prisma.$executeRaw`UPDATE "Vehicle" SET "vehicleType" = 'CAR' WHERE "vehicleNumber" IN ('CAB-1234','WP-KA-5678','NC-9012','WP-CB-3456','SP-7890')`;
 
     // ── Spare Parts ────────────────────────────────────────────────────────────
     const brakePart = await prisma.sparePart.upsert({

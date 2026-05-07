@@ -107,7 +107,7 @@ async function main() {
         await prisma.quotation.create({
             data: {
                 jobId: completedJob.id, vehicleId: v1.id, adminId: admin.id, managerId: manager.id,
-                vehicleNumber: 'CAB-1234', ownerName: 'Asanka Perera', telephone: '0712345678', vehicleType: 'CAR', color: 'Silver',
+                vehicleNumber: 'CAB-1234', ownerName: 'Asanka Perera', telephone: '0712345678', color: 'Silver',
                 jobDetails: 'Full vehicle service: oil change, filter replacement, brake inspection, fluid top-up.',
                 totalAmount: 15800, status: 'FINALIZED', notificationSent: true, notifiedAt: new Date('2025-04-12'),
                 createdAt: new Date('2025-04-11'),
@@ -126,7 +126,7 @@ async function main() {
         await prisma.quotation.create({
             data: {
                 jobId: finalizedJob.id, vehicleId: v2.id, adminId: admin.id, managerId: manager.id,
-                vehicleNumber: 'WP-KA-5678', ownerName: 'Saman Silva', telephone: '0723456789', vehicleType: 'CAR', color: 'White',
+                vehicleNumber: 'WP-KA-5678', ownerName: 'Saman Silva', telephone: '0723456789', color: 'White',
                 jobDetails: 'Engine knocking repair: spark plug replacement and timing belt replacement.',
                 totalAmount: 18500, status: 'FINALIZED', createdAt: new Date('2025-04-21'),
                 items: {
@@ -143,7 +143,7 @@ async function main() {
         await prisma.quotation.create({
             data: {
                 jobId: quotedJob.id, vehicleId: v3.id, adminId: admin.id,
-                vehicleNumber: 'NC-9012', ownerName: 'Dilshan Fernando', telephone: '0734567890', vehicleType: 'CAR', color: 'Blue',
+                vehicleNumber: 'NC-9012', ownerName: 'Dilshan Fernando', telephone: '0734567890', color: 'Blue',
                 insuranceCompany: 'Sri Lanka Insurance',
                 jobDetails: 'Accident recovery: front bumper, headlights, hood repair and repainting.',
                 totalAmount: 85000, status: 'SENT_TO_MANAGER', createdAt: new Date('2025-05-02'),
@@ -158,6 +158,9 @@ async function main() {
                 },
             },
         });
+
+        // Set vehicleType as plain TEXT on quotations (same reason as vehicles above)
+        await prisma.$executeRaw`UPDATE "Quotation" SET "vehicleType" = 'CAR' WHERE "vehicleNumber" IN ('CAB-1234','WP-KA-5678','NC-9012')`;
     }
 
     // ── Attendance (14 working days for demo employee) ─────────────────────────
